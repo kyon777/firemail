@@ -135,6 +135,7 @@
       v-model="previewDialogVisible"
       :title="previewingAttachment ? previewingAttachment.filename : '附件预览'"
       width="70%"
+      append-to-body
       destroy-on-close
     >
       <div v-if="previewingAttachment" class="attachment-preview">

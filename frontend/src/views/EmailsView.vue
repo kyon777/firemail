@@ -329,6 +329,9 @@
         width="80%"
         top="5vh"
         class="mail-content-dialog"
+        append-to-body
+        destroy-on-close
+        @close="handleCloseMailContentDialog"
       >
         <div v-if="selectedMail" class="mail-detail">
           <!-- 使用EmailContentViewer组件 -->
@@ -338,6 +341,12 @@
             :loading-attachments="false"
           />
         </div>
+
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="handleCloseMailContentDialog">关闭</el-button>
+          </span>
+        </template>
       </el-dialog>
 
       <!-- 编辑邮箱对话框 -->
@@ -768,6 +777,11 @@ const viewMailContent = (mail) => {
 
   selectedMail.value = formattedMail;
   mailContentDialogVisible.value = true;
+}
+
+const handleCloseMailContentDialog = () => {
+  mailContentDialogVisible.value = false
+  selectedMail.value = null
 }
 
 const showAddEmailDialog = () => {
