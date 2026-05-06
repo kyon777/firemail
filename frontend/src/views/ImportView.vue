@@ -11,8 +11,10 @@
           show-icon
         >
           <p>请选择邮箱类型，然后按照相应格式输入邮箱信息，每行一个：</p>
-          <p v-if="formData.mailType === 'outlook'"><code>邮箱地址----密码----客户端ID----RefreshToken</code></p>
-          <p>示例：example@outlook.com----password123----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C511_BL2...</p>
+          <p v-if="formData.mailType === 'outlook'"><code>邮箱地址----密码/占位----客户端ID----RefreshToken</code></p>
+          <p v-if="formData.mailType === 'outlook'"><code>兼容旧版右键导出：邮箱地址----密码/占位----RefreshToken----客户端ID</code></p>
+          <p>示例：example@outlook.com----x----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C511_BL2...</p>
+          <p>旧版示例：example@outlook.com----x----M.C511_BL2...----9e5f94bc-e8a4-4e73-b8be-63364c29d753</p>
         </el-alert>
         
         <el-form :model="formData" ref="formRef" :rules="rules" label-position="top">
@@ -100,6 +102,7 @@ import { ElMessage } from 'element-plus'
 import { Upload, RefreshRight } from '@element-plus/icons-vue'
 import { useEmailsStore } from '@/store/emails'
 import WebSocketService from '@/services/websocket'
+import { validateOutlookImportData } from '@/utils/importFormats'
 
 const router = useRouter()
 const emailsStore = useEmailsStore()
@@ -131,41 +134,15 @@ function validateImportData(rule, value, callback) {
     return
   }
   
-  const lines = value.trim().split('\n')
-  let hasError = false
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line) continue
-    
-    // 根据不同邮箱类型进行不同的验证
-    if (formData.mailType === 'outlook') {
-      const parts = line.split('----')
-      if (parts.length !== 4) {
-        hasError = true
-        callback(new Error(`第 ${i + 1} 行格式错误，请使用"----"分隔邮箱、密码、客户端ID和RefreshToken`))
-        break
-      }
-      
-      if (!parts[0] || !parts[1] || !parts[2] || !parts[3]) {
-        hasError = true
-        callback(new Error(`第 ${i + 1} 行有空白字段，所有字段都必须填写`))
-        break
-      }
-      
-      // 简单的邮箱格式检查
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parts[0])) {
-        hasError = true
-        callback(new Error(`第 ${i + 1} 行邮箱格式不正确`))
-        break
-      }
+  if (formData.mailType === 'outlook') {
+    const result = validateOutlookImportData(value)
+    if (!result.valid) {
+      callback(new Error(result.message))
+      return
     }
-    // 未来可在此处添加其他邮箱类型的验证逻辑
   }
-  
-  if (!hasError) {
-    callback()
-  }
+
+  callback()
 }
 
 // 处理WebSocket导入结果

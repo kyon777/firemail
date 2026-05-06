@@ -59,6 +59,9 @@
           <el-menu-item index="/emails">
             <el-icon><Message /></el-icon>邮箱管理
           </el-menu-item>
+          <el-menu-item index="/import">
+            <el-icon><Upload /></el-icon>批量导入
+          </el-menu-item>
           <el-menu-item index="/search">
             <el-icon><Search /></el-icon>邮件搜索
           </el-menu-item>
@@ -110,7 +113,7 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useStore } from 'vuex'
 import { ElConfigProvider, ElMessage } from 'element-plus'
-import { ArrowDown, Search, Message, HomeFilled, InfoFilled, UserFilled, Setting } from '@element-plus/icons-vue'
+import { ArrowDown, Search, Message, HomeFilled, InfoFilled, UserFilled, Setting, Upload } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import websocket from '@/services/websocket'

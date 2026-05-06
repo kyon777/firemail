@@ -9,6 +9,9 @@
               <el-button type="primary" @click="refreshEmails" :icon="Refresh" class="hover-scale">
                 刷新列表
               </el-button>
+              <el-button type="warning" @click="goToImportPage" :icon="Upload" class="hover-scale">
+                批量导入
+              </el-button>
               <el-button type="success" @click="showAddEmailDialog" :icon="Plus" class="hover-scale">
                 添加邮箱
               </el-button>
@@ -42,6 +45,7 @@
           :data="emails"
           @selection-change="handleSelectionChange"
           style="width: 100%"
+          size="small"
           stripe
           border
           highlight-current-row
@@ -52,8 +56,14 @@
             width="55"
             :selectable="row => row"
           />
-          <el-table-column prop="email" label="邮箱地址" width="220" />
-          <el-table-column prop="mail_type" label="邮箱类型" width="120">
+          <el-table-column prop="email" label="邮箱地址" min-width="260" show-overflow-tooltip>
+            <template #default="scope">
+              <div class="email-address-cell">
+                <span class="email-address-text">{{ scope.row.email }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="mail_type" label="邮箱类型" width="138">
             <template #default="scope">
               <el-tag
                 :type="getMailTypeColor(scope.row.mail_type || 'outlook')"
@@ -64,7 +74,7 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="password" label="密码" width="150">
+          <el-table-column prop="password" label="密码" width="128">
             <template #default="scope">
               <div class="password-field flex-between">
                 <span class="password-text">{{ scope.row.showPassword ? scope.row.password : '******' }}</span>
@@ -79,7 +89,7 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="配置信息" width="200">
+          <el-table-column label="配置信息" min-width="160" show-overflow-tooltip>
             <template #default="scope">
               <template v-if="scope.row.mail_type === 'imap'">
                 <div class="server-info">
@@ -104,16 +114,16 @@
                 </div>
               </template>
               <template v-else>
-                <div class="config-info">标准配置</div>
+                <div class="config-info">标准 OAuth 配置</div>
               </template>
             </template>
           </el-table-column>
-          <el-table-column prop="last_check_time" label="最后检查时间" width="180">
+          <el-table-column prop="last_check_time" label="最后检查时间" width="176">
             <template #default="scope">
-              <span>{{ formatDate(scope.row.last_check_time) }}</span>
+              <span class="time-field">{{ formatDate(scope.row.last_check_time) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" fixed="right" width="360">
+          <el-table-column label="操作" fixed="right" width="276">
             <template #default="scope">
               <div class="action-buttons flex gap-sm">
                 <el-button
@@ -224,7 +234,11 @@
           </el-tab-pane>
 
           <el-tab-pane label="批量添加" name="batch">
-            <p class="import-help">请按照以下格式输入邮箱信息，每行一个：<br/>邮箱地址----密码----客户端ID----刷新令牌</p>
+            <p class="import-help">
+              请输入批量邮箱数据，每行一个。支持两种 Outlook 格式：<br>
+              1. 邮箱地址----密码/占位----客户端ID----刷新令牌<br>
+              2. 旧版右键导出：邮箱地址----密码/占位----刷新令牌----客户端ID
+            </p>
             <el-form :model="batchImport" label-width="120px" :rules="batchImportRules" ref="batchImportFormRef">
               <el-form-item label="邮箱类型">
                 <el-select v-model="batchImport.mailType" placeholder="请选择邮箱类型">
@@ -238,8 +252,8 @@
                 <el-input
                   v-model="batchImport.data"
                   type="textarea"
-                  :rows="10"
-                  placeholder="例如: example@outlook.com----password----clientid----refreshtoken"
+                  :rows="12"
+                  placeholder="例如：example@outlook.com----x----M.C549...----9e5f94bc-e8a4-4e73-b8be-63364c29d753"
                 />
               </el-form-item>
             </el-form>
@@ -455,12 +469,14 @@
 
 <script setup>
 import { ref, computed, onMounted, reactive } from 'vue'
+import { useRouter } from 'vue-router'
 import { useEmailsStore } from '@/store/emails'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import {
   Delete,
   Refresh,
   Plus,
+  Upload,
   Download,
   Document,
   Message,
@@ -473,8 +489,10 @@ import DOMPurify from 'dompurify'
 import EmailContentViewer from '@/components/EmailContentViewer.vue'
 import EmailAttachments from '@/components/EmailAttachments.vue'
 import EmailQuoteFormatter from '@/components/EmailQuoteFormatter.vue'
+import { validateOutlookImportData } from '@/utils/importFormats'
 
 const emailsStore = useEmailsStore()
+const router = useRouter()
 
 // 状态
 const loadingMails = ref(false)
@@ -548,40 +566,15 @@ const batchImportRules = {
           return
         }
 
-        const lines = value.trim().split('\n')
-        let hasError = false
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim()
-          if (!line) continue
-
-          // 根据不同邮箱类型进行不同的验证
-          if (batchImport.mailType === 'outlook') {
-            const parts = line.split('----')
-            if (parts.length !== 4) {
-              hasError = true
-              callback(new Error(`第 ${i + 1} 行格式错误，请使用"----"分隔邮箱、密码、客户端ID和RefreshToken`))
-              break
-            }
-
-            if (!parts[0] || !parts[1] || !parts[2] || !parts[3]) {
-              hasError = true
-              callback(new Error(`第 ${i + 1} 行有空白字段，所有字段都必须填写`))
-              break
-            }
-
-            // 简单的邮箱格式检查
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parts[0])) {
-              hasError = true
-              callback(new Error(`第 ${i + 1} 行邮箱格式不正确`))
-              break
-            }
+        if (batchImport.mailType === 'outlook') {
+          const result = validateOutlookImportData(value)
+          if (!result.valid) {
+            callback(new Error(result.message))
+            return
           }
         }
 
-        if (!hasError) {
-          callback()
-        }
+        callback()
       },
       trigger: 'blur'
     }
@@ -788,6 +781,10 @@ const showAddEmailDialog = () => {
   resetAddEmailForm()
   addEmailDialogVisible.value = true
   addEmailActiveTab.value = 'single'
+}
+
+const goToImportPage = () => {
+  router.push('/import')
 }
 
 const handleAddOrImport = async () => {
@@ -1238,7 +1235,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 20px;
   padding: 20px;
-  max-width: 1200px;
+  max-width: 1560px;
   margin: 0 auto;
   width: 100%;
 }
@@ -1276,6 +1273,23 @@ onMounted(() => {
   overflow: hidden;
 }
 
+.email-address-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.email-address-text {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  color: var(--text-color);
+}
+
 .mail-type-tag {
   font-weight: 500;
 }
@@ -1309,15 +1323,16 @@ onMounted(() => {
 
 .action-buttons {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  justify-content: space-around;
+  flex-wrap: nowrap;
+  gap: 6px;
+  justify-content: flex-start;
 }
 
 .action-btn {
-  min-width: 70px;
-  margin: 2px;
+  min-width: 60px;
+  margin: 0;
   white-space: nowrap;
+  padding-inline: 10px;
 }
 
 .mail-dialog-header {
@@ -1464,7 +1479,7 @@ onMounted(() => {
 }
 
 .config-info {
-  font-style: italic;
+  font-style: normal;
   font-size: 0.85rem;
 }
 

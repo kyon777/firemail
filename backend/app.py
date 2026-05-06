@@ -10,6 +10,7 @@ from flask import Flask, send_from_directory, jsonify, request, Response, make_r
 from flask_cors import CORS
 from database.db import Database
 from utils.email import EmailBatchProcessor
+from utils.import_parser import normalize_outlook_import_line
 from ws_server.handler import WebSocketHandler
 import asyncio
 
@@ -782,16 +783,15 @@ def upload_email_file(current_user, email_id):
 @app.route('/api/emails/import', methods=['POST'])
 @token_required
 def import_emails(current_user):
-    """批量导入邮箱"""
+    """??????"""
     data = request.json.get('data')
     mail_type = request.json.get('mail_type', 'outlook')
 
     if not data:
-        return jsonify({'error': '导入数据不能为空'}), 400
+        return jsonify({'error': '????????'}), 400
 
-    # 解析导入的数据
     lines = data.strip().split('\n')
-    total = len(lines)
+    total = len([line for line in lines if line.strip()])
     success_count = 0
     failed_details = []
 
@@ -801,23 +801,20 @@ def import_emails(current_user):
             continue
 
         try:
-            parts = line.split('----')
-            if len(parts) != 4:
-                failed_details.append({
-                    'line': i + 1,
-                    'content': line,
-                    'reason': '格式错误，需要4个字段'
-                })
-                continue
+            if mail_type == 'outlook':
+                parsed = normalize_outlook_import_line(line)
+                email = parsed['email']
+                password = parsed['password']
+                client_id = parsed['client_id']
+                refresh_token = parsed['refresh_token']
+            else:
+                parts = [part.strip() for part in line.split('----')]
+                if len(parts) != 4:
+                    raise ValueError('???????4???')
 
-            email, password, client_id, refresh_token = parts
-            if not all([email, password, client_id, refresh_token]):
-                failed_details.append({
-                    'line': i + 1,
-                    'content': line,
-                    'reason': '有空白字段'
-                })
-                continue
+                email, password, client_id, refresh_token = parts
+                if not all([email, password, client_id, refresh_token]):
+                    raise ValueError('?????')
 
             success = db.add_email(current_user['id'], email, password, client_id, refresh_token, mail_type)
             if success:
@@ -826,17 +823,16 @@ def import_emails(current_user):
                 failed_details.append({
                     'line': i + 1,
                     'content': line,
-                    'reason': '邮箱地址已存在'
+                    'reason': '???????'
                 })
         except Exception as e:
-            logger.error(f"导入邮箱出错: {str(e)}")
+            logger.error(f"??????: {str(e)}")
             failed_details.append({
                 'line': i + 1,
                 'content': line,
-                'reason': f'导入异常: {str(e)}'
+                'reason': str(e)
             })
 
-    # 返回导入结果
     return jsonify({
         'total': total,
         'success': success_count,
@@ -844,7 +840,7 @@ def import_emails(current_user):
         'failed_details': failed_details
     })
 
-# 系统配置管理
+# ??????
 @app.route('/api/admin/config/registration', methods=['POST'])
 @token_required
 @admin_required

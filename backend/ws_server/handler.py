@@ -6,6 +6,7 @@ import websockets
 import jwt
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from utils.import_parser import normalize_outlook_import_line
 
 # 配置日志
 logger = logging.getLogger('websocket')
@@ -549,63 +550,91 @@ class WebSocketHandler:
                     'message': '用户不存在'
                 }))
                 return
-            
-            # 处理导入邮箱的逻辑
-            # 解析导入数据，预期格式: 一行一条，每条格式为 email----password----client_id----refresh_token
+            # ?????????
+            mail_type = data.get('mail_type', 'outlook')
             lines = import_data.strip().split('\n')
             imported_count = 0
             errors = []
+            failed_details = []
+            total = len([line for line in lines if line.strip()])
             
-            for line in lines:
+            for index, line in enumerate(lines):
                 try:
-                    parts = line.strip().split('----')
-                    
-                    if len(parts) < 2:
-                        errors.append(f"格式错误: {line}")
+                    line = line.strip()
+                    if not line:
                         continue
+
+                    if mail_type == 'outlook':
+                        parsed = normalize_outlook_import_line(line)
+                        email = parsed['email']
+                        password = parsed['password']
+                        client_id = parsed['client_id']
+                        refresh_token = parsed['refresh_token']
+                    else:
+                        parts = [part.strip() for part in line.split('----')]
+                        if len(parts) != 4:
+                            raise ValueError('???????4???')
+
+                        email, password, client_id, refresh_token = parts
+                        if not all([email, password, client_id, refresh_token]):
+                            raise ValueError('?????')
                     
-                    email = parts[0]
-                    password = parts[1]
-                    client_id = parts[2] if len(parts) > 2 else None
-                    refresh_token = parts[3] if len(parts) > 3 else None
-                    
-                    # 添加邮箱到数据库 - 确保参数顺序正确：user_id, email, password, client_id, refresh_token
-                    email_id = self.db.add_email(user_id, email, password, client_id, refresh_token)
+                    # ???????? - ?????????user_id, email, password, client_id, refresh_token
+                    email_id = self.db.add_email(user_id, email, password, client_id, refresh_token, mail_type)
                     if email_id:
                         imported_count += 1
                     else:
-                        errors.append(f"添加失败: {email}")
+                        failed_details.append({
+                            'line': index + 1,
+                            'content': line,
+                            'reason': '???????'
+                        })
+                        errors.append(f"????: {email}")
                 except Exception as e:
-                    errors.append(f"处理失败: {line} ({str(e)})")
+                    failed_details.append({
+                        'line': index + 1,
+                        'content': line,
+                        'reason': str(e)
+                    })
+                    errors.append(f"????: {line} ({str(e)})")
             
-            # 发送导入结果消息
+            await websocket.send(json.dumps({
+                'type': 'import_result',
+                'total': total,
+                'success': imported_count,
+                'failed': len(failed_details),
+                'failed_details': failed_details
+            }))
+            
+            # ????????
             if imported_count > 0:
                 await websocket.send(json.dumps({
                     'type': 'success',
-                    'message': f'成功导入 {imported_count} 个邮箱'
+                    'message': f'???? {imported_count} ???'
                 }))
                 
-                # 广播邮箱列表更新
+                # ????????
                 await websocket.send(json.dumps({
                     'type': 'emails_imported'
                 }))
             else:
                 await websocket.send(json.dumps({
                     'type': 'warning',
-                    'message': '没有成功导入任何邮箱'
+                    'message': '??????????'
                 }))
             
-            # 如果有错误，也发送错误详情
+            # ?????????????
             if errors:
                 error_message = '\n'.join(errors[:10])
                 if len(errors) > 10:
-                    error_message += f"\n...以及其他 {len(errors) - 10} 个错误"
+                    error_message += f"\n...???? {len(errors) - 10} ???"
                 
                 await websocket.send(json.dumps({
                     'type': 'error',
-                    'message': f'导入过程中出现以下错误:\n{error_message}'
+                    'message': f'???????????:\n{error_message}'
                 }))
             
+            logger.info(f"??ID {user_id} ???????????: {imported_count}???: {len(errors)}")
             logger.info(f"用户ID {user_id} 完成邮箱批量导入，成功: {imported_count}，失败: {len(errors)}")
         except Exception as e:
             logger.error(f"导入邮箱失败: {str(e)}")
