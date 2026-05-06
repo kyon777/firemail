@@ -12,7 +12,6 @@ from database.db import Database
 from utils.email import EmailBatchProcessor
 from ws_server.handler import WebSocketHandler
 import asyncio
-import concurrent.futures
 
 # 配置日志
 logging.basicConfig(
@@ -536,26 +535,18 @@ def check_email(current_user, email_id):
                 logger.error(f"发送进度更新失败: {str(e)}")
 
         # 提交任务到线程池
-        future = email_processor.manual_thread_pool.submit(
+        email_processor.manual_thread_pool.submit(
             email_processor._check_email_task,
             email_info,
             progress_callback
         )
 
-        # 等待任务完成
-        result = future.result(timeout=300)  # 设置超时时间为5分钟
-
-        # 记录任务完成
-        logger.info(f"任务完成: {result}")
-
-        return jsonify(result)
-
-    except concurrent.futures.TimeoutError:
-        logger.error(f"检查邮箱超时: {email_id}")
+        logger.info(f"邮箱检查任务已提交: {email_info['email']}")
         return jsonify({
-            'success': False,
-            'message': '检查邮箱超时，请稍后再试'
-        }), 408
+            'success': True,
+            'status': 'started',
+            'message': f"已开始检查邮箱 {email_info['email']}"
+        }), 202
 
     except Exception as e:
         logger.error(f"检查邮箱失败: {str(e)}")
