@@ -15,6 +15,7 @@ vi.mock('@/services/api', () => ({
 vi.mock('@/services/websocket', () => ({
   default: {
     isConnected: false,
+    isAuthenticated: false,
     send: vi.fn(),
     onConnect: vi.fn(),
     onDisconnect: vi.fn(),
@@ -27,6 +28,7 @@ describe('emails store - checkEmail', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     websocket.isConnected = false
+    websocket.isAuthenticated = false
   })
 
   afterEach(() => {
@@ -58,6 +60,7 @@ describe('emails store - checkEmail', () => {
 
   it('falls back to http when websocket send returns false', async () => {
     websocket.isConnected = true
+    websocket.isAuthenticated = true
     websocket.send.mockReturnValue(false)
     api.emails.check.mockResolvedValue({ data: { success: true, message: 'started' }, status: 202 })
     const store = useEmailsStore()
@@ -67,6 +70,20 @@ describe('emails store - checkEmail', () => {
     expect(websocket.send).toHaveBeenCalledWith('check_emails', { email_ids: [8] })
     expect(api.emails.check).toHaveBeenCalledWith([8])
     expect(store.processingEmails[8]).toEqual(expect.objectContaining({ progress: 0, message: '开始检查...' }))
+  })
+
+  it('does not fall back to http when websocket is connected but unauthenticated and send returns false', async () => {
+    websocket.isConnected = true
+    websocket.isAuthenticated = false
+    websocket.send.mockReturnValue(false)
+    const store = useEmailsStore()
+
+    const result = await store.checkEmail(12)
+
+    expect(websocket.send).toHaveBeenCalledWith('check_emails', { email_ids: [12] })
+    expect(api.emails.check).not.toHaveBeenCalled()
+    expect(result).toEqual({ success: true, status: 'started', message: '检查任务已启动' })
+    expect(store.processingEmails[12]).toEqual(expect.objectContaining({ progress: 0, message: '开始检查...' }))
   })
 
   it('returns processing status on http 409 conflict', async () => {

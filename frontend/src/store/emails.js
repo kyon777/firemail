@@ -263,6 +263,10 @@ export const useEmailsStore = defineStore('emails', {
           if (sent) {
             return { success: true, status: 'started', message: '检查任务已启动' };
           }
+
+          if (websocket.isAuthenticated === false) {
+            return { success: true, status: 'started', message: '检查任务已启动' };
+          }
         }
 
         const response = await api.emails.check([emailId]);
