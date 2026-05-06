@@ -546,7 +546,7 @@ class WebSocketService {
   }
 
   // 重置WebSocket状态
-  resetState() {
+  resetState({ clearPendingRequests = true } = {}) {
     // 清除心跳检测
     this.clearHeartbeat();
 
@@ -554,7 +554,9 @@ class WebSocketService {
     this.isConnected = false;
     this.isAuthenticated = false;
     this.authAttempted = false;
-    this.pendingRequests = [];
+    if (clearPendingRequests) {
+      this.pendingRequests = [];
+    }
 
     // 清除重连计时器
     if (this.reconnectTimeoutId) {
@@ -567,7 +569,7 @@ class WebSocketService {
   reconnect() {
     console.log('重新连接WebSocket...');
     // 先断开现有连接并重置状态
-    this.disconnect();
+    this.disconnect({ clearPendingRequests: false });
 
     // 延迟一段时间后重新连接
     setTimeout(() => {
@@ -583,9 +585,9 @@ class WebSocketService {
   }
 
   // 断开WebSocket连接
-  disconnect() {
+  disconnect({ clearPendingRequests = true } = {}) {
     // 先重置状态
-    this.resetState();
+    this.resetState({ clearPendingRequests });
 
     // 关闭WebSocket连接
     if (this.socket) {
