@@ -80,6 +80,57 @@ class ExistingDatabaseMigrationTestCase(unittest.TestCase):
         finally:
             db.conn.close()
 
+    def test_existing_database_migration_adds_legacy_users_password_column(self):
+        legacy_db_path = Path(self.temp_dir.name) / "legacy-hash-only.db"
+
+        conn = sqlite3.connect(legacy_db_path)
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                is_admin INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE emails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                password TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE system_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT UNIQUE NOT NULL,
+                value TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO users (username, password_hash, salt, is_admin) VALUES ('admin', 'hash', 'salt', 1)"
+        )
+        conn.commit()
+        conn.close()
+
+        db = object.__new__(Database)
+        db.connect_db(str(legacy_db_path))
+
+        try:
+            db.migrate_existing_database()
+
+            columns = [row[1] for row in db.conn.execute("PRAGMA table_info(users)").fetchall()]
+            self.assertIn("password", columns)
+        finally:
+            db.conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

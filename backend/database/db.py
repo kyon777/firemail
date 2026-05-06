@@ -198,6 +198,7 @@ class Database:
             ''')
 
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
+            self._check_and_add_column('users', 'password', 'TEXT')
             self._check_and_add_column('users', 'password_hash', 'TEXT')
             self._check_and_add_column('users', 'salt', 'TEXT')
             self._check_and_add_column('users', 'created_at', 'TIMESTAMP')

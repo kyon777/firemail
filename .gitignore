@@ -55,5 +55,6 @@ logs/
 
 # SQLite database
 backend/data/*.db 
+backend/data-backups/
 # Git worktrees
 .worktrees/
