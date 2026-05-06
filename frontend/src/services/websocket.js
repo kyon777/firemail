@@ -505,15 +505,12 @@ class WebSocketService {
             // 如果超过30秒未收到心跳响应，认为连接已断开
             if (timeSinceLastHeartbeat > 30000) {
               console.warn('心跳检测超时，重新连接WebSocket');
-              this.disconnect();
-              this.connect();
+              this.reconnect();
             }
           }, 10000); // 10秒超时
         } catch (error) {
           console.error('发送心跳消息失败:', error);
-          this.clearHeartbeat();
-          this.disconnect();
-          this.connect();
+          this.reconnect();
         }
       }
     }, 20000); // 每20秒发送一次心跳

@@ -67,4 +67,43 @@ describe('websocket service - send', () => {
     expect(replayCalls).toHaveLength(1)
     expect(replayCalls[0]).toEqual(['check_emails', { email_ids: [99] }])
   })
+
+  it('preserves pending requests across heartbeat recovery and still replays only once after auth succeeds', async () => {
+    localStorage.setItem('token', 'test-token')
+    const { default: websocket } = await import('@/services/websocket')
+
+    websocket.isConnected = true
+    websocket.isAuthenticated = false
+    websocket.socket = {
+      send: vi.fn((message) => {
+        if (message === JSON.stringify({ type: 'heartbeat' })) {
+          throw new Error('heartbeat send failed')
+        }
+      }),
+      close: vi.fn()
+    }
+
+    const doSendSpy = vi.spyOn(websocket, 'doSend')
+    vi.spyOn(websocket, 'connect').mockImplementation(() => {
+      websocket.isConnected = true
+      websocket.socket = {
+        send: vi.fn(),
+        close: vi.fn()
+      }
+    })
+
+    const result = websocket.send('check_emails', { email_ids: [123] })
+    expect(result).toBe(false)
+
+    websocket.startHeartbeat()
+    vi.advanceTimersByTime(20000)
+    vi.advanceTimersByTime(1000)
+
+    websocket.handleMessage({ type: 'auth_result', success: true })
+    vi.advanceTimersByTime(2500)
+
+    const replayCalls = doSendSpy.mock.calls.filter(([type]) => type === 'check_emails')
+    expect(replayCalls).toHaveLength(1)
+    expect(replayCalls[0]).toEqual(['check_emails', { email_ids: [123] }])
+  })
 })
