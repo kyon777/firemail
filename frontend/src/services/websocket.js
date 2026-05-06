@@ -43,6 +43,7 @@ class WebSocketService {
     this.connectHandlers = [];
     this.disconnectHandlers = [];
     this.authSuccessHandlers = []; // 认证成功处理器
+    this.pendingRequests = [];
 
     // 心跳检测
     this.heartbeatInterval = null;
@@ -247,13 +248,15 @@ class WebSocketService {
         setTimeout(() => this.sendAuthMessage(token), 500);
 
         // 保存请求，认证后可能需要重发
-        this.pendingRequests = this.pendingRequests || [];
-        this.pendingRequests.push({type, data});
+        const pendingRequest = { type, data };
+        this.pendingRequests.push(pendingRequest);
 
         // 设置超时重发
         setTimeout(() => {
-          if (this.isAuthenticated && this.isConnected) {
+          const isStillPending = this.pendingRequests.includes(pendingRequest);
+          if (isStillPending && this.isAuthenticated && this.isConnected) {
             console.log('认证成功，重新发送之前的请求:', type);
+            this.pendingRequests = this.pendingRequests.filter(req => req !== pendingRequest);
             this.doSend(type, data);
           }
         }, 2000);
@@ -551,6 +554,7 @@ class WebSocketService {
     this.isConnected = false;
     this.isAuthenticated = false;
     this.authAttempted = false;
+    this.pendingRequests = [];
 
     // 清除重连计时器
     if (this.reconnectTimeoutId) {
