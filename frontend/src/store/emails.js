@@ -92,6 +92,7 @@ export const useEmailsStore = defineStore('emails', {
             if (this.currentEmailId === email_id) {
               this.fetchMailRecords(email_id);
             }
+            delete this.processingEmails[email_id]
           }, 1000);
         }
       });
@@ -246,28 +247,25 @@ export const useEmailsStore = defineStore('emails', {
 
     // 检查单个邮箱
     async checkEmail(emailId) {
+      this.processingEmails[emailId] = { progress: 0, message: '开始检查...' }
+
       try {
-        // 使用api对象调用，确保使用正确的基础URL
-        console.log(`检查邮箱 ID:${emailId}`);
-        const response = await api.emails.check([emailId]);
-
-        // 处理响应
-        if (response.status === 409) {
-          // 邮箱正在处理中，这是正常状态，不抛出错误
-          console.log('邮箱正在处理中:', response.data);
-          return { success: false, message: response.data.message, status: 'processing' };
+        if (websocket.isConnected) {
+          websocket.send('check_emails', { email_ids: [emailId] })
+          return { success: true, status: 'started', message: '检查任务已启动' }
         }
 
-        return true;
+        const response = await api.emails.check([emailId])
+        return response?.data || { success: true, status: 'started', message: '检查任务已启动' }
       } catch (error) {
-        // 特殊处理409状态码（邮箱正在处理中）
+        delete this.processingEmails[emailId]
+
         if (error.response && error.response.status === 409) {
-          console.log('邮箱正在处理中:', error.response.data);
-          return { success: false, message: error.response.data.message, status: 'processing' };
+          this.processingEmails[emailId] = { progress: 0, message: error.response.data.message || '邮箱正在处理中' }
+          return { success: false, message: error.response.data.message, status: 'processing' }
         }
 
-        console.error('检查邮箱失败:', error);
-        throw error;
+        throw error
       }
     },
 
