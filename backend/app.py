@@ -514,14 +514,16 @@ def check_email(current_user, email_id):
         if email_info['user_id'] != current_user['id']:
             return jsonify({'error': '无权操作此邮箱'}), 403
 
-        # 检查邮箱是否正在处理中
-        if email_processor.is_email_being_processed(email_id):
-            logger.info(f"邮箱 ID {email_id} 正在处理中，拒绝重复请求")
-            return jsonify({
-                'success': False,
-                'message': '邮箱正在处理中，请稍后再试',
-                'status': 'processing'
-            }), 409
+        # 在提交任务前原子化检查并标记处理中，避免重复入队
+        with email_processor.lock:
+            if email_id in email_processor.processing_emails:
+                logger.info(f"邮箱 ID {email_id} 正在处理中，拒绝重复请求")
+                return jsonify({
+                    'success': False,
+                    'message': '邮箱正在处理中，请稍后再试',
+                    'status': 'processing'
+                }), 409
+            email_processor.processing_emails[email_id] = True
 
         # 创建进度回调
         def progress_callback(progress, message):
@@ -535,11 +537,17 @@ def check_email(current_user, email_id):
                 logger.error(f"发送进度更新失败: {str(e)}")
 
         # 提交任务到线程池
-        email_processor.manual_thread_pool.submit(
-            email_processor._check_email_task,
-            email_info,
-            progress_callback
-        )
+        try:
+            email_processor.manual_thread_pool.submit(
+                email_processor._check_email_task,
+                email_info,
+                progress_callback
+            )
+        except Exception:
+            with email_processor.lock:
+                if email_id in email_processor.processing_emails:
+                    del email_processor.processing_emails[email_id]
+            raise
 
         logger.info(f"邮箱检查任务已提交: {email_info['email']}")
         return jsonify({

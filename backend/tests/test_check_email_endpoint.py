@@ -12,13 +12,19 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from backend.app import app
+from backend.app import app, email_processor
 
 
 class CheckEmailEndpointTestCase(unittest.TestCase):
     def setUp(self):
         app.config['TESTING'] = True
         self.client = app.test_client()
+        with email_processor.lock:
+            email_processor.processing_emails.clear()
+
+    def tearDown(self):
+        with email_processor.lock:
+            email_processor.processing_emails.clear()
 
     @patch('backend.app.email_processor.manual_thread_pool.submit')
     @patch('backend.app.email_processor.is_email_being_processed')
@@ -53,12 +59,49 @@ class CheckEmailEndpointTestCase(unittest.TestCase):
             headers={'Authorization': 'Bearer fake-token'}
         )
 
-        self.assertIn(response.status_code, (200, 202))
+        self.assertEqual(response.status_code, 202)
         data = response.get_json()
         self.assertEqual(data['status'], 'started')
         self.assertIn('message', data)
         mock_submit.assert_called_once()
         mock_future.result.assert_not_called()
+
+    @patch('backend.app.email_processor.manual_thread_pool.submit')
+    @patch('backend.app.db.get_email_by_id')
+    @patch('backend.app.db.get_user_by_id')
+    @patch('backend.app.jwt.decode')
+    def test_check_email_returns_processing_when_same_email_already_enqueued(
+        self,
+        mock_jwt_decode,
+        mock_get_user_by_id,
+        mock_get_email_by_id,
+        mock_submit,
+    ):
+        current_user = {'id': 99, 'username': 'tester', 'is_admin': False}
+        mock_jwt_decode.return_value = {'user_id': 99}
+        mock_get_user_by_id.return_value = current_user
+        mock_get_email_by_id.return_value = {'id': 1, 'user_id': 99, 'email': 'demo@outlook.com'}
+        mock_submit.return_value = MagicMock()
+
+        first_response = self.client.post(
+            '/api/emails/1/check',
+            json={},
+            headers={'Authorization': 'Bearer fake-token'}
+        )
+        second_response = self.client.post(
+            '/api/emails/1/check',
+            json={},
+            headers={'Authorization': 'Bearer fake-token'}
+        )
+
+        self.assertEqual(first_response.status_code, 202)
+        self.assertEqual(first_response.get_json()['status'], 'started')
+
+        self.assertEqual(second_response.status_code, 409)
+        second_data = second_response.get_json()
+        self.assertEqual(second_data['status'], 'processing')
+        self.assertIn('message', second_data)
+        mock_submit.assert_called_once()
 
 
 if __name__ == '__main__':
