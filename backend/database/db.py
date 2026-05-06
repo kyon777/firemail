@@ -30,6 +30,7 @@ class Database:
                     # 数据库文件已存在，只建立连接
                     logger.info(f"数据库文件已存在: {db_path}，建立连接")
                     cls._instance.connect_db(db_path)
+                    cls._instance.migrate_existing_database()
 
                     # 检查数据库是否有用户，如果有则认为数据库已经初始化
                     cursor = cls._instance.conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'")
@@ -163,6 +164,63 @@ class Database:
 
         except Exception as e:
             logger.error(f"初始化数据库表结构失败: {str(e)}")
+            traceback.print_exc()
+
+    def migrate_existing_database(self):
+        """对已存在的数据库补齐兼容性结构，不覆盖现有配置"""
+        try:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS mail_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email_id INTEGER NOT NULL,
+                    subject TEXT,
+                    sender TEXT,
+                    received_time TIMESTAMP,
+                    content TEXT,
+                    folder TEXT,
+                    has_attachments INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (email_id) REFERENCES emails (id)
+                )
+            ''')
+
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mail_id INTEGER NOT NULL,
+                    filename TEXT,
+                    content_type TEXT,
+                    size INTEGER,
+                    content BLOB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (mail_id) REFERENCES mail_records (id) ON DELETE CASCADE
+                )
+            ''')
+
+            self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
+            self._check_and_add_column('users', 'password_hash', 'TEXT')
+            self._check_and_add_column('users', 'salt', 'TEXT')
+            self._check_and_add_column('users', 'created_at', 'TIMESTAMP')
+            self._check_and_add_column('users', 'updated_at', 'TIMESTAMP')
+            self._check_and_add_column('emails', 'mail_type', "TEXT DEFAULT 'outlook'")
+            self._check_and_add_column('emails', 'server', 'TEXT')
+            self._check_and_add_column('emails', 'port', 'INTEGER')
+            self._check_and_add_column('emails', 'use_ssl', 'INTEGER DEFAULT 1')
+            self._check_and_add_column('emails', 'client_id', 'TEXT')
+            self._check_and_add_column('emails', 'refresh_token', 'TEXT')
+            self._check_and_add_column('emails', 'access_token', 'TEXT')
+            self._check_and_add_column('emails', 'last_check_time', 'TIMESTAMP')
+            self._check_and_add_column('emails', 'created_at', 'TIMESTAMP')
+            self._check_and_add_column('emails', 'updated_at', 'TIMESTAMP')
+            self._check_and_add_column('mail_records', 'folder', 'TEXT')
+            self._check_and_add_column('mail_records', 'has_attachments', 'INTEGER DEFAULT 0')
+            self._check_and_add_column('mail_records', 'created_at', 'TIMESTAMP')
+            self._check_and_add_column('system_config', 'description', 'TEXT')
+            self._check_and_add_column('system_config', 'created_at', 'TIMESTAMP')
+            self._check_and_add_column('system_config', 'updated_at', 'TIMESTAMP')
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"迁移现有数据库结构失败: {str(e)}")
             traceback.print_exc()
 
     def _check_and_add_column(self, table, column, type_def):

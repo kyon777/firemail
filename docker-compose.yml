@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   firemail:
     build: .
@@ -7,18 +5,18 @@ services:
     container_name: firemail
     restart: unless-stopped
     ports:
-      - "80:80"  # 只暴露一个端口，通过Nginx进行反向代理
+      - "18000:80"
     volumes:
       - ./backend/data:/app/backend/data
     environment:
       - TZ=Asia/Shanghai
       - HOST=0.0.0.0
-      - FLASK_PORT=5000  # 后端服务器端口
-      - WS_PORT=8765     # WebSocket服务器端口
-      - JWT_SECRET_KEY=huohuo_email_secret_key
+      - FLASK_PORT=5000
+      - WS_PORT=8765
+      - JWT_SECRET_KEY=your_secret_key_here
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s 
+      start_period: 20s
