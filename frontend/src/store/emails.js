@@ -9,6 +9,7 @@ export const useEmailsStore = defineStore('emails', {
     error: null,
     selectedEmails: [],
     processingEmails: {},
+    processingSequence: 0,
     currentMailRecords: [],
     currentEmailId: null,
     isConnected: false
@@ -81,10 +82,13 @@ export const useEmailsStore = defineStore('emails', {
       // 处理进度更新
       websocket.onMessage('check_progress', (data) => {
         const { email_id, progress, message } = data;
-        this.processingEmails[email_id] = { progress, message };
+        const currentEntry = this.processingEmails[email_id];
+        const sequence = currentEntry?._sequence ?? ++this.processingSequence;
+        this.processingEmails[email_id] = { progress, message, _sequence: sequence };
 
         // 进度完成后刷新邮箱列表
         if (progress === 100) {
+          const completedSequence = sequence;
           // 延迟刷新，确保服务器已完成处理
           setTimeout(() => {
             this.fetchEmails();
@@ -92,7 +96,10 @@ export const useEmailsStore = defineStore('emails', {
             if (this.currentEmailId === email_id) {
               this.fetchMailRecords(email_id);
             }
-            delete this.processingEmails[email_id]
+            const latestEntry = this.processingEmails[email_id];
+            if (latestEntry?._sequence === completedSequence && latestEntry.progress === 100) {
+              delete this.processingEmails[email_id];
+            }
           }, 1000);
         }
       });
@@ -247,25 +254,37 @@ export const useEmailsStore = defineStore('emails', {
 
     // 检查单个邮箱
     async checkEmail(emailId) {
-      this.processingEmails[emailId] = { progress: 0, message: '开始检查...' }
+      const sequence = ++this.processingSequence;
+      this.processingEmails[emailId] = { progress: 0, message: '开始检查...', _sequence: sequence };
 
       try {
         if (websocket.isConnected) {
-          websocket.send('check_emails', { email_ids: [emailId] })
-          return { success: true, status: 'started', message: '检查任务已启动' }
+          const sent = websocket.send('check_emails', { email_ids: [emailId] });
+          if (sent) {
+            return { success: true, status: 'started', message: '检查任务已启动' };
+          }
         }
 
-        const response = await api.emails.check([emailId])
-        return response?.data || { success: true, status: 'started', message: '检查任务已启动' }
+        const response = await api.emails.check([emailId]);
+        return response?.data || { success: true, status: 'started', message: '检查任务已启动' };
       } catch (error) {
-        delete this.processingEmails[emailId]
+        const isCurrentSequence = this.processingEmails[emailId]?._sequence === sequence;
+        if (isCurrentSequence) {
+          delete this.processingEmails[emailId];
+        }
 
         if (error.response && error.response.status === 409) {
-          this.processingEmails[emailId] = { progress: 0, message: error.response.data.message || '邮箱正在处理中' }
-          return { success: false, message: error.response.data.message, status: 'processing' }
+          if (isCurrentSequence) {
+            this.processingEmails[emailId] = {
+              progress: 0,
+              message: error.response.data.message || '邮箱正在处理中',
+              _sequence: sequence
+            };
+          }
+          return { success: false, message: error.response.data.message, status: 'processing' };
         }
 
-        throw error
+        throw error;
       }
     },
 
