@@ -490,6 +490,7 @@ import EmailContentViewer from '@/components/EmailContentViewer.vue'
 import EmailAttachments from '@/components/EmailAttachments.vue'
 import EmailQuoteFormatter from '@/components/EmailQuoteFormatter.vue'
 import { validateOutlookImportData } from '@/utils/importFormats'
+import { getImportResultFeedback } from '@/utils/importResult'
 
 const emailsStore = useEmailsStore()
 const router = useRouter()
@@ -852,18 +853,18 @@ const handleImport = async () => {
       mail_type: batchImport.mailType
     }
 
-    await emailsStore.importEmails(importData)
-    ElMessage.info('正在处理导入请求，请稍候...')
+    const result = await emailsStore.importEmails(importData)
+    await refreshEmails()
 
-    // 延迟刷新列表
-    setTimeout(async () => {
-      await refreshEmails()
-      ElMessage.success('批量导入完成')
+    const feedback = getImportResultFeedback(result)
+    ElMessage[feedback.type](feedback.message)
+
+    if ((result?.failed || 0) === 0) {
       addEmailDialogVisible.value = false
-    }, 2000)
+    }
   } catch (error) {
-    console.error('导入邮箱失败:', error)
-    ElMessage.error('导入邮箱失败: ' + (error.message || '未知错误'))
+    console.error('??????????????????:', error)
+    ElMessage.error('??????????????????: ' + (error.message || '????????????'))
   } finally {
     importing.value = false
   }

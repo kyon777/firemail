@@ -163,21 +163,51 @@ export const useEmailsStore = defineStore('emails', {
       this.error = null;
 
       try {
-        console.log('导入邮箱：', importData);
+        console.log('???????????????', importData);
         if (!websocket.isConnected) {
-          await api.emails.import(importData);
-        } else {
-          websocket.send('import_emails', importData);
+          const response = await api.emails.import(importData);
+          return response.data;
         }
+
+        return await new Promise((resolve, reject) => {
+          let timeoutId = null;
+
+          const handleResult = (result) => {
+            cleanup();
+            resolve(result);
+          };
+
+          const cleanup = () => {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+            }
+            websocket.offMessage('import_result', handleResult);
+          };
+
+          timeoutId = setTimeout(() => {
+            cleanup();
+            reject(new Error('????????????????????????????????????????????????'));
+          }, 30000);
+
+          websocket.onMessage('import_result', handleResult);
+
+          const sent = websocket.importEmails
+            ? websocket.importEmails(importData)
+            : websocket.send('import_emails', importData);
+
+          if (sent === false && websocket.isAuthenticated) {
+            cleanup();
+            reject(new Error('??????????????????????????????????????????'));
+          }
+        });
       } catch (error) {
-        this.error = '导入邮箱失败';
+        this.error = '??????????????????';
         throw error;
       } finally {
         this.loading = false;
       }
     },
 
-    // 获取所有邮箱
     async fetchEmails() {
       this.loading = true;
       this.error = null;

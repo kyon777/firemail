@@ -96,13 +96,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Upload, RefreshRight } from '@element-plus/icons-vue'
 import { useEmailsStore } from '@/store/emails'
-import WebSocketService from '@/services/websocket'
 import { validateOutlookImportData } from '@/utils/importFormats'
+import { getImportResultFeedback } from '@/utils/importResult'
 
 const router = useRouter()
 const emailsStore = useEmailsStore()
@@ -145,62 +145,31 @@ function validateImportData(rule, value, callback) {
   callback()
 }
 
-// 处理WebSocket导入结果
-const handleImportResult = (result) => {
+// ??????
+const handleImportResult = async (result) => {
   importResult.value = result
   loading.value = false
-  
-  if (result.success > 0) {
-    ElMessage.success(`成功导入 ${result.success} 个邮箱`)
-  } else {
-    ElMessage.warning('没有成功导入任何邮箱，请检查导入数据')
-  }
-  
-  // 刷新邮箱列表
-  emailsStore.fetchEmails()
+
+  const feedback = getImportResultFeedback(result)
+  ElMessage[feedback.type](feedback.message)
+
+  await emailsStore.fetchEmails()
 }
 
-// 注册和移除WebSocket消息处理器
-onMounted(() => {
-  WebSocketService.onMessage('import_result', handleImportResult)
-})
-
-onUnmounted(() => {
-  WebSocketService.offMessage('import_result', handleImportResult)
-})
-
-// 提交表单
 async function submitForm() {
   if (!formRef.value) return
   
   try {
     await formRef.value.validate()
     loading.value = true
-    
-    // 准备发送的数据，添加邮箱类型标识
+
     const importDataWithType = {
       data: formData.importData.trim(),
-      mailType: formData.mailType
+      mail_type: formData.mailType
     }
-    
-    // 如果WebSocket已连接，则使用WebSocket导入
-    if (WebSocketService.isConnected) {
-      // 使用WebSocket发送导入请求
-      WebSocketService.importEmails(importDataWithType)
-      
-      ElMessage.info('正在处理导入请求，请稍候...')
-      // 结果将通过WebSocket消息回调处理
-    } else {
-      // 否则使用API导入
-      const result = await emailsStore.importEmails(importDataWithType)
-      importResult.value = result
-      
-      if (result.success > 0) {
-        ElMessage.success(`成功导入 ${result.success} 个邮箱`)
-      } else {
-        ElMessage.warning('没有成功导入任何邮箱，请检查导入数据')
-      }
-    }
+
+    const result = await emailsStore.importEmails(importDataWithType)
+    await handleImportResult(result)
   } catch (error) {
     ElMessage.error(error.message || '表单验证失败')
     loading.value = false
@@ -299,4 +268,4 @@ function navigateToEmails() {
     padding: 10px;
   }
 }
-</style> 
+</style>

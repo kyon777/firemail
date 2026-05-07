@@ -53,6 +53,37 @@ class ImportEmailEndpointTestCase(unittest.TestCase):
             'outlook'
         )
 
+    @patch('backend.app.db.email_exists', create=True)
+    @patch('backend.app.db.add_email')
+    @patch('backend.app.db.get_user_by_id')
+    @patch('backend.app.jwt.decode')
+    def test_import_endpoint_reports_duplicate_email_reason(
+        self,
+        mock_jwt_decode,
+        mock_get_user_by_id,
+        mock_add_email,
+        mock_email_exists,
+    ):
+        mock_jwt_decode.return_value = {'user_id': 99}
+        mock_get_user_by_id.return_value = {'id': 99, 'username': 'tester', 'is_admin': False}
+        mock_add_email.return_value = False
+        mock_email_exists.return_value = True
+
+        response = self.client.post(
+            '/api/emails/import',
+            json={
+                'data': 'demo@outlook.com----x----M.C549_SN1.token-value$$----9e5f94bc-e8a4-4e73-b8be-63364c29d753',
+                'mail_type': 'outlook'
+            },
+            headers={'Authorization': 'Bearer fake-token'}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['success'], 0)
+        self.assertEqual(payload['failed'], 1)
+        self.assertEqual(payload['failed_details'][0]['reason'], '邮箱已存在')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -584,12 +584,13 @@ class WebSocketHandler:
                     if email_id:
                         imported_count += 1
                     else:
+                        failure_reason = '邮箱已存在' if self.db.email_exists(user_id, email) else '邮箱添加失败'
                         failed_details.append({
                             'line': index + 1,
                             'content': line,
-                            'reason': '???????'
+                            'reason': failure_reason
                         })
-                        errors.append(f"????: {email}")
+                        errors.append(f"导入失败: {email} ({failure_reason})")
                 except Exception as e:
                     failed_details.append({
                         'line': index + 1,

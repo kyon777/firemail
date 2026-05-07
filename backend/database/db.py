@@ -503,6 +503,14 @@ class Database:
         )
         return cursor.fetchall()
 
+    def email_exists(self, user_id, email):
+        """??????????????"""
+        cursor = self.conn.execute(
+            "SELECT 1 FROM emails WHERE user_id = ? AND email = ? LIMIT 1",
+            (user_id, email)
+        )
+        return cursor.fetchone() is not None
+
     def get_email_by_id(self, email_id, user_id=None):
         """根据ID获取邮箱账号，可以验证所有者"""
         logger.debug(f"获取邮箱 ID: {email_id}")

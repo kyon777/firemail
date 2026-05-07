@@ -475,7 +475,7 @@ class WebSocketService {
       // 确保有mailType字段，默认为outlook
       const payload = {
         data: data.data,
-        mail_type: data.mailType || 'outlook'
+        mail_type: data.mailType || data.mail_type || 'outlook'
       };
 
       return this.send(MessageTypes.IMPORT_EMAILS, payload);

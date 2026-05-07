@@ -820,10 +820,11 @@ def import_emails(current_user):
             if success:
                 success_count += 1
             else:
+                failure_reason = '邮箱已存在' if db.email_exists(current_user['id'], email) else '邮箱添加失败'
                 failed_details.append({
                     'line': i + 1,
                     'content': line,
-                    'reason': '???????'
+                    'reason': failure_reason
                 })
         except Exception as e:
             logger.error(f"??????: {str(e)}")
