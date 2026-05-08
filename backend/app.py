@@ -783,12 +783,12 @@ def upload_email_file(current_user, email_id):
 @app.route('/api/emails/import', methods=['POST'])
 @token_required
 def import_emails(current_user):
-    """??????"""
+    """批量导入邮箱"""
     data = request.json.get('data')
     mail_type = request.json.get('mail_type', 'outlook')
 
     if not data:
-        return jsonify({'error': '????????'}), 400
+        return jsonify({'error': '未提供导入数据'}), 400
 
     lines = data.strip().split('\n')
     total = len([line for line in lines if line.strip()])
@@ -810,11 +810,11 @@ def import_emails(current_user):
             else:
                 parts = [part.strip() for part in line.split('----')]
                 if len(parts) != 4:
-                    raise ValueError('???????4???')
+                    raise ValueError('导入格式错误，应包含 4 个字段')
 
                 email, password, client_id, refresh_token = parts
                 if not all([email, password, client_id, refresh_token]):
-                    raise ValueError('?????')
+                    raise ValueError('导入数据不能为空')
 
             success = db.add_email(current_user['id'], email, password, client_id, refresh_token, mail_type)
             if success:
@@ -827,7 +827,7 @@ def import_emails(current_user):
                     'reason': failure_reason
                 })
         except Exception as e:
-            logger.error(f"??????: {str(e)}")
+            logger.error(f"导入邮箱失败: {str(e)}")
             failed_details.append({
                 'line': i + 1,
                 'content': line,
@@ -841,7 +841,7 @@ def import_emails(current_user):
         'failed_details': failed_details
     })
 
-# ??????
+# 管理员配置 API
 @app.route('/api/admin/config/registration', methods=['POST'])
 @token_required
 @admin_required

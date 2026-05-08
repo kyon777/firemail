@@ -941,6 +941,18 @@ class Database:
             logger.error(f"获取邮件记录失败: {str(e)}")
             return None
 
+    def get_mail_record_folders(self, email_id):
+        """获取指定邮箱已经保存过邮件的文件夹列表"""
+        try:
+            cursor = self.conn.execute(
+                "SELECT DISTINCT folder FROM mail_records WHERE email_id = ? AND folder IS NOT NULL",
+                (email_id,)
+            )
+            return [row[0] for row in cursor.fetchall() if row[0]]
+        except Exception as e:
+            logger.error(f"获取邮件文件夹列表失败: {str(e)}")
+            return []
+
     def save_mail_records(self, email_id: int, mail_records: List[Dict], progress_callback: Optional[Callable] = None) -> int:
         """保存邮件记录到数据库"""
         saved_count = 0

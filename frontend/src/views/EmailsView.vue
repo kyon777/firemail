@@ -295,45 +295,70 @@
           </el-button>
         </div>
 
-        <el-table
-          v-loading="loadingMails"
-          :data="mailRecords"
-          style="width: 100%"
-          stripe
-          border
-          max-height="60vh"
-          class="mail-list-table"
-        >
-          <el-table-column prop="subject" label="主题" min-width="250" show-overflow-tooltip>
-            <template #default="scope">
-              <div class="subject-cell">
-                <span>{{ scope.row.subject }}</span>
-                <el-tag v-if="scope.row.has_attachments" size="small" type="success" class="attachment-tag">
-                  <el-icon><Document /></el-icon> 附件
-                </el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="sender" label="发件人" min-width="200" show-overflow-tooltip />
-          <el-table-column prop="received_time" label="接收时间" width="180">
-            <template #default="scope">
-              <span class="time-field">{{ formatDate(scope.row.received_time) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="120" fixed="right">
-            <template #default="scope">
-              <el-button
-                type="primary"
-                size="small"
-                @click="viewMailContent(scope.row)"
-                :icon="Document"
-                class="view-btn"
-              >
-                查看
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="mail-dialog-layout">
+          <aside class="mail-folder-sidebar">
+            <button
+              v-for="folderFilter in mailFolderFilters"
+              :key="folderFilter.key"
+              type="button"
+              class="mail-folder-item"
+              :class="{ active: selectedMailFolderFilter === folderFilter.key }"
+              @click="selectedMailFolderFilter = folderFilter.key"
+            >
+              <span>{{ folderFilter.label }}</span>
+              <el-tag size="small" effect="plain">{{ folderFilter.count }}</el-tag>
+            </button>
+          </aside>
+
+          <div class="mail-dialog-table">
+            <el-table
+              v-loading="loadingMails"
+              :data="filteredMailRecords"
+              style="width: 100%"
+              stripe
+              border
+              max-height="60vh"
+              class="mail-list-table"
+            >
+              <el-table-column prop="subject" label="主题" min-width="250" show-overflow-tooltip>
+                <template #default="scope">
+                  <div class="subject-cell">
+                    <span>{{ scope.row.subject }}</span>
+                    <el-tag v-if="scope.row.has_attachments" size="small" type="success" class="attachment-tag">
+                      <el-icon><Document /></el-icon> 附件
+                    </el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="sender" label="发件人" min-width="200" show-overflow-tooltip />
+              <el-table-column label="文件夹" width="110">
+                <template #default="scope">
+                  <el-tag size="small" :type="getFolderTagType(scope.row.folder)">
+                    {{ getFolderLabel(scope.row.folder) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="received_time" label="接收时间" width="180">
+                <template #default="scope">
+                  <span class="time-field">{{ formatDate(scope.row.received_time) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="120" fixed="right">
+                <template #default="scope">
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="viewMailContent(scope.row)"
+                    :icon="Document"
+                    class="view-btn"
+                  >
+                    查看
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
       </el-dialog>
 
       <!-- 邮件内容查看对话框 -->
@@ -491,6 +516,7 @@ import EmailAttachments from '@/components/EmailAttachments.vue'
 import EmailQuoteFormatter from '@/components/EmailQuoteFormatter.vue'
 import { validateOutlookImportData } from '@/utils/importFormats'
 import { getImportResultFeedback } from '@/utils/importResult'
+import { buildMailFolderFilters, filterMailRecordsByFolder, getMailFolderCategory } from '@/utils/mailFolders'
 
 const emailsStore = useEmailsStore()
 const router = useRouter()
@@ -503,6 +529,7 @@ const mailContentDialogVisible = ref(false)
 const mailListDialogVisible = ref(false)
 const addingEmail = ref(false)
 const importing = ref(false)
+const selectedMailFolderFilter = ref('all')
 
 // 添加邮箱表单引用
 const addEmailFormRef = ref(null)
@@ -619,6 +646,8 @@ const loading = computed(() => emailsStore.loading)
 const currentEmail = computed(() => emailsStore.getEmailById(emailsStore.currentEmailId))
 const mailRecords = computed(() => emailsStore.currentMailRecords)
 const hasSelectedEmails = computed(() => emailsStore.hasSelectedEmails)
+const mailFolderFilters = computed(() => buildMailFolderFilters(mailRecords.value))
+const filteredMailRecords = computed(() => filterMailRecordsByFolder(mailRecords.value, selectedMailFolderFilter.value))
 
 // 方法
 const refreshEmails = async () => {
@@ -743,6 +772,7 @@ const handleViewMails = async (row) => {
   loadingMails.value = true
   try {
     emailsStore.currentEmailId = row.id
+    selectedMailFolderFilter.value = 'all'
     await emailsStore.fetchMailRecords(row.id)
     mailListDialogVisible.value = true
   } catch (error) {
@@ -776,6 +806,15 @@ const viewMailContent = (mail) => {
 const handleCloseMailContentDialog = () => {
   mailContentDialogVisible.value = false
   selectedMail.value = null
+}
+
+const getFolderLabel = (folder) => getMailFolderCategory(folder).label
+
+const getFolderTagType = (folder) => {
+  const folderKey = getMailFolderCategory(folder).key
+  if (folderKey === 'inbox') return 'primary'
+  if (folderKey === 'junk') return 'danger'
+  return 'info'
 }
 
 const showAddEmailDialog = () => {
@@ -863,8 +902,8 @@ const handleImport = async () => {
       addEmailDialogVisible.value = false
     }
   } catch (error) {
-    console.error('??????????????????:', error)
-    ElMessage.error('??????????????????: ' + (error.message || '????????????'))
+    console.error('批量导入邮箱失败:', error)
+    ElMessage.error('批量导入邮箱失败: ' + (error.message || '未知错误'))
   } finally {
     importing.value = false
   }
@@ -1351,6 +1390,46 @@ onMounted(() => {
   overflow: hidden;
 }
 
+.mail-dialog-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.mail-folder-sidebar {
+  width: 148px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mail-folder-item {
+  width: 100%;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #303133;
+}
+
+.mail-folder-item:hover,
+.mail-folder-item.active {
+  border-color: #409eff;
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.mail-dialog-table {
+  flex: 1;
+  min-width: 0;
+}
+
 .subject-cell {
   display: flex;
   align-items: center;
@@ -1522,4 +1601,21 @@ onMounted(() => {
 .hover-scale:hover:not(:disabled) {
   transform: scale(1.05);
 }
+
+@media (max-width: 768px) {
+  .mail-dialog-layout {
+    flex-direction: column;
+  }
+
+  .mail-folder-sidebar {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mail-dialog-table {
+    width: 100%;
+  }
+}
+
 </style>

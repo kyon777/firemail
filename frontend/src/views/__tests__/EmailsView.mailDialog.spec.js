@@ -109,4 +109,57 @@ describe('EmailsView mail content dialog', () => {
     expect(vm.mailContentDialogVisible).toBe(false)
     expect(vm.selectedMail).toBe(null)
   })
+
+  it('groups mail records into inbox and junk filters in the dialog', async () => {
+    mockStore.currentMailRecords = [
+      { id: 1, subject: 'Inbox A', sender: 'a@example.com', folder: 'INBOX', content: 'body' },
+      { id: 2, subject: 'Inbox B', sender: 'b@example.com', folder: 'inbox', content: 'body' },
+      { id: 3, subject: 'Junk A', sender: 'c@example.com', folder: 'Junk', content: 'body' },
+      { id: 4, subject: 'Other', sender: 'd@example.com', folder: 'Notes', content: 'body' }
+    ]
+
+    const wrapper = mount(EmailsView, {
+      global: {
+        directives: {
+          loading: {}
+        },
+        stubs: {
+          transition: false,
+          teleport: true,
+          'el-card': true,
+          'el-button': true,
+          'el-table': true,
+          'el-table-column': true,
+          'el-tag': true,
+          'el-dialog': true,
+          'el-tabs': true,
+          'el-tab-pane': true,
+          'el-form': true,
+          'el-form-item': true,
+          'el-select': true,
+          'el-option': true,
+          'el-input': true,
+          'el-input-number': true,
+          'el-switch': true,
+          'el-icon': true,
+          'el-tooltip': true,
+          'el-progress': true
+        }
+      }
+    })
+
+    const vm = wrapper.vm
+
+    expect(vm.mailFolderFilters).toEqual([
+      { key: 'all', label: '全部', count: 4 },
+      { key: 'inbox', label: '收件箱', count: 2 },
+      { key: 'junk', label: '垃圾箱', count: 1 },
+      { key: 'other', label: '其他', count: 1 }
+    ])
+
+    vm.selectedMailFolderFilter = 'junk'
+    await vm.$nextTick()
+
+    expect(vm.filteredMailRecords.map(mail => mail.id)).toEqual([3])
+  })
 })

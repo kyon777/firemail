@@ -52,7 +52,7 @@ class WebSocketHandler:
             user_id = self.validate_token(auth_data.get('token'))
             if not user_id:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '无效的认证令牌，请重新登录'
                 }))
                 return
@@ -147,18 +147,18 @@ class WebSocketHandler:
                     await self.handle_import_emails(websocket, user_id, data)
                 else:
                     await websocket.send(json.dumps({
-                        'type': 'error',
+                        'type': 'warning',
                         'message': f'未知消息类型: {message_type}'
                     }))
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '无效的JSON消息'
                 }))
             except Exception as e:
                 logger.error(f"处理消息时出错: {str(e)}")
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': f'处理消息时出错: {str(e)}'
                 }))
     
@@ -169,7 +169,7 @@ class WebSocketHandler:
             user = self.db.get_user_by_id(user_id)
             if not user:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '用户不存在'
                 }))
                 return
@@ -194,7 +194,7 @@ class WebSocketHandler:
         except Exception as e:
             logger.error(f"获取邮箱列表失败: {str(e)}")
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': f'获取邮箱列表失败: {str(e)}'
             }))
     
@@ -205,7 +205,7 @@ class WebSocketHandler:
             email_ids = data.get('email_ids', [])
             if not email_ids:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '未提供邮箱ID'
                 }))
                 return
@@ -214,7 +214,7 @@ class WebSocketHandler:
             user = self.db.get_user_by_id(user_id)
             if not user:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '用户不存在'
                 }))
                 return
@@ -231,7 +231,7 @@ class WebSocketHandler:
                 
                 if not valid_ids:
                     await websocket.send(json.dumps({
-                        'type': 'error',
+                        'type': 'warning',
                         'message': '您没有权限检查任何指定的邮箱'
                     }))
                     return
@@ -292,7 +292,7 @@ class WebSocketHandler:
         except Exception as e:
             logger.error(f"检查邮箱失败: {str(e)}")
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': f'检查邮箱失败: {str(e)}'
             }))
     
@@ -303,7 +303,7 @@ class WebSocketHandler:
             email_id = data.get('email_id')
             if not email_id:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '未提供邮箱ID'
                 }))
                 return
@@ -312,7 +312,7 @@ class WebSocketHandler:
             user = self.db.get_user_by_id(user_id)
             if not user:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '用户不存在'
                 }))
                 return
@@ -322,7 +322,7 @@ class WebSocketHandler:
             email_info = self.db.get_email_by_id(email_id, None if is_admin else user_id)
             if not email_info:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': f'邮箱ID {email_id} 不存在或您没有权限'
                 }))
                 return
@@ -341,7 +341,7 @@ class WebSocketHandler:
         except Exception as e:
             logger.error(f"获取邮件记录失败: {str(e)}")
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': f'获取邮件记录失败: {str(e)}'
             }))
     
@@ -360,7 +360,7 @@ class WebSocketHandler:
             
             if not email or not password:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '邮箱地址和密码不能为空'
                 }))
                 return
@@ -369,7 +369,7 @@ class WebSocketHandler:
             if mail_type == 'outlook':
                 if not client_id or not refresh_token:
                     await websocket.send(json.dumps({
-                        'type': 'error',
+                        'type': 'warning',
                         'message': 'Outlook邮箱需要提供Client ID和Refresh Token'
                     }))
                     return
@@ -396,13 +396,13 @@ class WebSocketHandler:
             else:
                 # 发送错误消息
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': f'邮箱 {email} 添加失败，可能已存在'
                 }))
         except Exception as e:
             logger.error(f"添加邮箱失败: {str(e)}")
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': f'添加邮箱失败: {str(e)}'
             }))
     
@@ -413,7 +413,7 @@ class WebSocketHandler:
             email_ids = data.get('email_ids', [])
             if not email_ids:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '未提供邮箱ID'
                 }))
                 return
@@ -422,7 +422,7 @@ class WebSocketHandler:
             user = self.db.get_user_by_id(user_id)
             if not user:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '用户不存在'
                 }))
                 return
@@ -450,7 +450,7 @@ class WebSocketHandler:
         except Exception as e:
             logger.error(f"删除邮箱失败: {str(e)}")
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': f'删除邮箱失败: {str(e)}'
             }))
     
@@ -537,7 +537,7 @@ class WebSocketHandler:
             import_data = data.get('data', '')
             if not import_data:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '未提供要导入的邮箱数据'
                 }))
                 return
@@ -546,11 +546,11 @@ class WebSocketHandler:
             user = self.db.get_user_by_id(user_id)
             if not user:
                 await websocket.send(json.dumps({
-                    'type': 'error',
+                    'type': 'warning',
                     'message': '用户不存在'
                 }))
                 return
-            # ?????????
+            # 兼容不同邮箱导入格式
             mail_type = data.get('mail_type', 'outlook')
             lines = import_data.strip().split('\n')
             imported_count = 0
@@ -573,13 +573,13 @@ class WebSocketHandler:
                     else:
                         parts = [part.strip() for part in line.split('----')]
                         if len(parts) != 4:
-                            raise ValueError('???????4???')
+                            raise ValueError('导入格式错误，应包含 4 个字段')
 
                         email, password, client_id, refresh_token = parts
                         if not all([email, password, client_id, refresh_token]):
-                            raise ValueError('?????')
+                            raise ValueError('导入数据不能为空')
                     
-                    # ???????? - ?????????user_id, email, password, client_id, refresh_token
+                    # 添加邮箱记录，参数顺序为 user_id, email, password, client_id, refresh_token
                     email_id = self.db.add_email(user_id, email, password, client_id, refresh_token, mail_type)
                     if email_id:
                         imported_count += 1
@@ -597,7 +597,7 @@ class WebSocketHandler:
                         'content': line,
                         'reason': str(e)
                     })
-                    errors.append(f"????: {line} ({str(e)})")
+                    errors.append(f"导入失败: {line} ({str(e)})")
             
             await websocket.send(json.dumps({
                 'type': 'import_result',
@@ -607,40 +607,40 @@ class WebSocketHandler:
                 'failed_details': failed_details
             }))
             
-            # ????????
+            # 发送导入结果摘要
             if imported_count > 0:
                 await websocket.send(json.dumps({
                     'type': 'success',
-                    'message': f'???? {imported_count} ???'
+                    'message': f'成功导入 {imported_count} 个邮箱'
                 }))
                 
-                # ????????
+                # 发送导入结果摘要
                 await websocket.send(json.dumps({
                     'type': 'emails_imported'
                 }))
             else:
                 await websocket.send(json.dumps({
                     'type': 'warning',
-                    'message': '??????????'
+                    'message': '本次导入没有新增邮箱'
                 }))
             
-            # ?????????????
+            # 导入失败详情使用 warning，避免与系统错误混淆
             if errors:
                 error_message = '\n'.join(errors[:10])
                 if len(errors) > 10:
-                    error_message += f"\n...???? {len(errors) - 10} ???"
+                    error_message += f"\n... 其余 {len(errors) - 10} 条已省略"
                 
                 await websocket.send(json.dumps({
-                    'type': 'error',
-                    'message': f'???????????:\n{error_message}'
+                    'type': 'warning',
+                    'message': f'批量导入存在失败记录：\n{error_message}'
                 }))
             
-            logger.info(f"??ID {user_id} ???????????: {imported_count}???: {len(errors)}")
+            logger.info(f"用户ID {user_id} 批量导入完成: 成功 {imported_count}，失败 {len(errors)}")
             logger.info(f"用户ID {user_id} 完成邮箱批量导入，成功: {imported_count}，失败: {len(errors)}")
         except Exception as e:
             logger.error(f"导入邮箱失败: {str(e)}")
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': f'导入邮箱失败: {str(e)}'
             }))
     
@@ -778,7 +778,7 @@ class WebSocketHandler:
         """发送错误消息"""
         try:
             await websocket.send(json.dumps({
-                'type': 'error',
+                'type': 'warning',
                 'message': message
             }))
         except:

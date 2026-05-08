@@ -86,72 +86,59 @@ class MailProcessor:
                 if i % 10 == 0 or i == total - 1:  # 每10封记录一次进度
                     log_progress(email_id, progress, progress_message)
 
-                # 检查邮件是否已存在
                 subject = record.get("subject", "(无主题)")
                 sender = record.get("sender", "(未知发件人)")
 
-                logger.debug(f"检查邮件是否存在: '{subject[:30]}...' 发件人: '{sender[:30]}...'")
+                logger.debug(f"保存邮件记录: '{subject[:30]}...' 发件人: '{sender[:30]}...'")
 
-                existing = db.get_mail_record_by_subject_and_sender(
-                    email_id,
-                    subject,
-                    sender
+                has_attachments = record.get("has_attachments", False)
+
+                success, mail_id = db.add_mail_record(
+                    email_id=email_id,
+                    subject=subject,
+                    sender=sender,
+                    content=record.get("content", "(无内容)"),
+                    received_time=record.get("received_time", datetime.now()),
+                    folder=record.get("folder", "INBOX"),
+                    has_attachments=1 if has_attachments else 0
                 )
 
-                if not existing:
-                    # 保存新邮件记录
-                    logger.debug(f"保存新邮件记录: '{subject[:30]}...'")
+                if success and mail_id:
+                    # 如果有附件，保存附件
+                    if has_attachments and "full_attachments" in record:
+                        attachments = record.get("full_attachments", [])
+                        logger.debug(f"开始保存附件: {len(attachments)} 个")
 
-                    has_attachments = record.get("has_attachments", False)
+                        for attachment in attachments:
+                            try:
+                                filename = attachment.get("filename", "")
+                                content_type = attachment.get("content_type", "")
+                                size = attachment.get("size", 0)
+                                content = attachment.get("content", b"")
 
-                    success, mail_id = db.add_mail_record(
-                        email_id=email_id,
-                        subject=subject,
-                        sender=sender,
-                        content=record.get("content", "(无内容)"),
-                        received_time=record.get("received_time", datetime.now()),
-                        folder=record.get("folder", "INBOX"),
-                        has_attachments=1 if has_attachments else 0
-                    )
-
-                    if success and mail_id:
-                        # 如果有附件，保存附件
-                        if has_attachments and "full_attachments" in record:
-                            attachments = record.get("full_attachments", [])
-                            logger.debug(f"开始保存附件: {len(attachments)} 个")
-
-                            for attachment in attachments:
-                                try:
-                                    filename = attachment.get("filename", "")
-                                    content_type = attachment.get("content_type", "")
-                                    size = attachment.get("size", 0)
-                                    content = attachment.get("content", b"")
-
-                                    if not filename or not content:
-                                        continue
-
-                                    attachment_id = db.add_attachment(
-                                        mail_id=mail_id,
-                                        filename=filename,
-                                        content_type=content_type,
-                                        size=size,
-                                        content=content
-                                    )
-
-                                    if attachment_id:
-                                        logger.debug(f"附件保存成功: {filename}")
-                                    else:
-                                        logger.warning(f"附件保存失败: {filename}")
-
-                                except Exception as e:
-                                    logger.error(f"保存附件失败: {str(e)}")
+                                if not filename or not content:
                                     continue
-                        saved_count += 1
-                        logger.debug(f"邮件记录保存成功: '{subject[:30]}...'")
-                    else:
-                        logger.warning(f"邮件记录保存失败: '{subject[:30]}...'")
+
+                                attachment_id = db.add_attachment(
+                                    mail_id=mail_id,
+                                    filename=filename,
+                                    content_type=content_type,
+                                    size=size,
+                                    content=content
+                                )
+
+                                if attachment_id:
+                                    logger.debug(f"附件保存成功: {filename}")
+                                else:
+                                    logger.warning(f"附件保存失败: {filename}")
+
+                            except Exception as e:
+                                logger.error(f"保存附件失败: {str(e)}")
+                                continue
+                    saved_count += 1
+                    logger.debug(f"邮件记录保存成功: '{subject[:30]}...'")
                 else:
-                    logger.debug(f"邮件记录已存在: '{subject[:30]}...'")
+                    logger.debug(f"邮件记录已存在或保存失败: '{subject[:30]}...'")
 
             except Exception as e:
                 logger.error(f"保存邮件记录失败: {str(e)}")
@@ -226,6 +213,32 @@ class EmailBatchProcessor:
     def save_mail_records(self, db, email_id: int, mail_records: List[Dict], progress_callback: Optional[Callable] = None) -> int:
         """保存邮件记录到数据库"""
         return MailProcessor.save_mail_records(db, email_id, mail_records, progress_callback)
+
+    @staticmethod
+    def _normalize_outlook_folder_name(folder_name: Optional[str]) -> str:
+        if not folder_name:
+            return ''
+
+        folder_lower = str(folder_name).strip().lower()
+        for logical_name, aliases in OutlookMailHandler.DEFAULT_FOLDERS.items():
+            alias_lowers = {alias.lower() for alias in aliases}
+            if folder_lower in alias_lowers:
+                return logical_name
+
+        return folder_lower
+
+    def _outlook_folder_has_history(self, email_id: int, folder_name: str) -> bool:
+        try:
+            existing_folders = self.db.get_mail_record_folders(email_id)
+        except Exception:
+            return False
+
+        target_folder = self._normalize_outlook_folder_name(folder_name)
+        for existing_folder in existing_folders or []:
+            if self._normalize_outlook_folder_name(existing_folder) == target_folder:
+                return True
+
+        return False
 
     def check_emails(self, email_ids: List[int], progress_callback: Optional[Callable] = None, is_realtime: bool = False) -> bool:
         """批量检查邮箱邮件"""
@@ -333,13 +346,23 @@ class EmailBatchProcessor:
                     # 记录开始处理
                     log_email_start(email_info['email'], email_id)
 
-                    # 获取邮件，增加last_check_time参数
-                    mail_records = OutlookMailHandler.fetch_emails(
+                    target_folders = ['inbox', 'junkemail']
+                    folder_last_check_times = {}
+                    for folder_name in target_folders:
+                        folder_last_check_times[folder_name] = (
+                            last_check_time
+                            if self._outlook_folder_has_history(email_id, folder_name)
+                            else None
+                        )
+
+                    # 获取邮件，至少覆盖收件箱和垃圾箱
+                    mail_records = OutlookMailHandler.fetch_emails_from_folders(
                         email_info['email'],
                         access_token,
-                        folder="inbox",
+                        folders=target_folders,
                         callback=callback,
-                        last_check_time=last_check_time
+                        last_check_time=last_check_time,
+                        folder_last_check_times=folder_last_check_times
                     )
 
                     if not mail_records:

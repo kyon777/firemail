@@ -50,35 +50,54 @@
           <el-empty description="暂无邮件记录" />
         </div>
 
-        <div v-else>
-          <el-collapse accordion @change="handleCollapseChange">
-            <el-collapse-item v-for="mail in filteredMailRecords" :key="mail.id" :name="mail.id">
-              <template #title>
-                <div class="mail-title">
-                  <span class="subject">{{ mail.subject || '(无主题)' }}</span>
-                  <span class="date">{{ formatDate(mail.received_time) }}</span>
-                  <el-tag v-if="mail.has_attachments" size="small" type="success" class="attachment-tag">
-                    <el-icon><Document /></el-icon> 附件
-                  </el-tag>
-                </div>
-              </template>
+        <div v-else class="mail-detail-layout">
+          <aside class="mail-folder-sidebar">
+            <button
+              v-for="folderFilter in mailFolderFilters"
+              :key="folderFilter.key"
+              type="button"
+              class="mail-folder-item"
+              :class="{ active: selectedMailFolderFilter === folderFilter.key }"
+              @click="selectedMailFolderFilter = folderFilter.key"
+            >
+              <span>{{ folderFilter.label }}</span>
+              <el-tag size="small" effect="plain">{{ folderFilter.count }}</el-tag>
+            </button>
+          </aside>
 
-              <div class="mail-content">
-                <!-- 使用EmailContentViewer组件 -->
-                <EmailContentViewer
-                  :mail="mail"
-                  :attachments="mailAttachments[mail.id] || []"
-                  :loading-attachments="loadingAttachments"
-                />
-              </div>
-            </el-collapse-item>
-          </el-collapse>
+          <div class="mail-detail-list">
+            <el-collapse accordion @change="handleCollapseChange">
+              <el-collapse-item v-for="mail in filteredMailRecords" :key="mail.id" :name="mail.id">
+                <template #title>
+                  <div class="mail-title">
+                    <span class="subject">{{ mail.subject || '(无主题)' }}</span>
+                    <div class="mail-title-meta">
+                      <el-tag size="small" :type="getFolderTagType(mail.folder)">
+                        {{ getFolderLabel(mail.folder) }}
+                      </el-tag>
+                      <span class="date">{{ formatDate(mail.received_time) }}</span>
+                      <el-tag v-if="mail.has_attachments" size="small" type="success" class="attachment-tag">
+                        <el-icon><Document /></el-icon> 附件
+                      </el-tag>
+                    </div>
+                  </div>
+                </template>
+
+                <div class="mail-content">
+                  <EmailContentViewer
+                    :mail="mail"
+                    :attachments="mailAttachments[mail.id] || []"
+                    :loading-attachments="loadingAttachments"
+                  />
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
         </div>
       </el-card>
     </div>
   </div>
 
-  <!-- 上传邮件文件对话框 -->
   <el-dialog
     v-model="uploadDialogVisible"
     title="上传邮件文件"
@@ -127,131 +146,73 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { Download, Delete, Search, Upload, UploadFilled, Document } from '@element-plus/icons-vue'
 import { useEmailsStore } from '@/store/emails'
 import dayjs from 'dayjs'
-import DOMPurify from 'dompurify'
 import axios from 'axios'
 import EmailContentViewer from '@/components/EmailContentViewer.vue'
-import EmailAttachments from '@/components/EmailAttachments.vue'
-import EmailQuoteFormatter from '@/components/EmailQuoteFormatter.vue'
+import { buildMailFolderFilters, filterMailRecordsByFolder, getMailFolderCategory } from '@/utils/mailFolders'
 
 const route = useRoute()
 const router = useRouter()
 const emailsStore = useEmailsStore()
 const searchQuery = ref('')
-const mailAttachments = ref({}) // 存储邮件附件信息
+const selectedMailFolderFilter = ref('all')
+const mailAttachments = ref({})
 const loadingAttachments = ref(false)
 
-// 上传邮件文件相关
 const uploadDialogVisible = ref(false)
 const uploadRef = ref(null)
 const fileList = ref([])
 const uploading = ref(false)
 
-// 邮箱ID
 const emailId = computed(() => parseInt(route.params.id))
-
-// 邮箱信息
 const email = computed(() => emailsStore.getEmailById(emailId.value))
-
-// 处理状态
 const loading = computed(() => emailsStore.loading)
+const mailRecords = computed(() => emailsStore.currentMailRecords)
+const mailFolderFilters = computed(() => buildMailFolderFilters(mailRecords.value))
+
+const filteredMailRecords = computed(() => {
+  const records = filterMailRecordsByFolder(mailRecords.value, selectedMailFolderFilter.value)
+  const query = searchQuery.value.trim().toLowerCase()
+
+  if (!query) return records
+
+  return records.filter(mail => {
+    const subject = String(mail?.subject || '').toLowerCase()
+    const content = typeof mail?.content === 'object'
+      ? String(mail?.content?.content || '').toLowerCase()
+      : String(mail?.content || '').toLowerCase()
+
+    return subject.includes(query) || content.includes(query)
+  })
+})
+
 const isProcessing = computed(() => {
   const status = getProcessingStatus(emailId.value)
   return status && status.progress > 0 && status.progress < 100
 })
 
-// 邮件记录
-const mailRecords = computed(() => emailsStore.currentMailRecords)
-
-// 过滤的邮件记录
-const filteredMailRecords = computed(() => {
-  if (!searchQuery.value) return mailRecords.value
-
-  const query = searchQuery.value.toLowerCase()
-  return mailRecords.value.filter(mail => {
-    return (mail.subject && mail.subject.toLowerCase().includes(query)) ||
-           (mail.content && mail.content.toLowerCase().includes(query))
-  })
-})
-
-// 获取处理状态
 const getProcessingStatus = (id) => {
   return emailsStore.getProcessingStatus(id)
 }
 
-// 格式化日期
 const formatDate = (dateString) => {
   if (!dateString) return '无'
   return dayjs(dateString).format('YYYY-MM-DD HH:mm:ss')
 }
 
-// 返回
 const goBack = () => {
   router.push('/emails')
 }
 
-// 检查邮件内容是否为HTML格式
-const isHtmlContent = (mail) => {
-  if (!mail || !mail.content) return false;
-
-  // 兼容新旧格式
-  if (typeof mail.content === 'object') {
-    return mail.content.has_html === true || mail.content.content_type === 'text/html';
-  }
-
-  // 旧格式，检查内容是否包含HTML标签
-  const content = String(mail.content);
-  return content.includes('<html') || content.includes('<body') ||
-         content.includes('<div') || content.includes('<p>') ||
-         content.includes('<table') || content.includes('<img');
-}
-
-// 获取邮件内容
-const getMailContent = (mail) => {
-  if (!mail) return '';
-
-  // 兼容新旧格式
-  if (typeof mail.content === 'object' && mail.content !== null) {
-    return mail.content.content || '';
-  }
-
-  return mail.content || '';
-}
-
-// 净化HTML内容，防止XSS攻击
-const sanitizeHtml = (html) => {
-  if (!html) return '';
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: [
-      'a', 'b', 'br', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-      'i', 'img', 'li', 'ol', 'p', 'span', 'strong', 'table', 'tbody',
-      'td', 'th', 'thead', 'tr', 'u', 'ul', 'font', 'blockquote', 'hr',
-      'pre', 'code', 'col', 'colgroup', 'section', 'header', 'footer',
-      'nav', 'article', 'aside', 'figure', 'figcaption', 'address', 'main',
-      'caption', 'center', 'cite', 'dd', 'dl', 'dt', 'mark', 's', 'small',
-      'strike', 'sub', 'sup'
-    ],
-    ALLOWED_ATTR: [
-      'href', 'target', 'src', 'alt', 'style', 'class', 'id', 'width', 'height',
-      'align', 'valign', 'bgcolor', 'border', 'cellpadding', 'cellspacing',
-      'color', 'colspan', 'dir', 'face', 'frame', 'frameborder', 'headers',
-      'hspace', 'lang', 'marginheight', 'marginwidth', 'nowrap', 'rel',
-      'rev', 'rowspan', 'scrolling', 'shape', 'span', 'summary', 'title',
-      'usemap', 'vspace', 'start', 'type', 'value', 'size', 'data-*'
-    ]
-  });
-}
-
-// 加载邮件附件
 const loadMailAttachments = async (mailId) => {
   if (mailAttachments.value[mailId]) {
-    return // 已加载过，不重复加载
+    return
   }
 
   loadingAttachments.value = true
   try {
     const response = await axios.get(`/api/mail_records/${mailId}/attachments`, {
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        Authorization: `Bearer ${localStorage.getItem('token')}`
       }
     })
 
@@ -268,56 +229,11 @@ const loadMailAttachments = async (mailId) => {
   }
 }
 
-// 下载附件
-const downloadAttachment = (attachmentId, filename) => {
-  const token = localStorage.getItem('token')
-  const downloadUrl = `/api/attachments/${attachmentId}/download`
-
-  // 创建一个隐藏的a标签用于下载
-  const link = document.createElement('a')
-  link.href = downloadUrl
-  link.setAttribute('download', filename)
-  link.setAttribute('target', '_blank')
-
-  // 添加认证头
-  fetch(downloadUrl, {
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
-  })
-  .then(response => response.blob())
-  .then(blob => {
-    const url = window.URL.createObjectURL(blob)
-    link.href = url
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
-  })
-  .catch(error => {
-    console.error('下载附件失败:', error)
-    ElMessage.error('下载附件失败')
-  })
-}
-
-// 格式化文件大小
-const formatFileSize = (bytes) => {
-  if (bytes === 0) return '0 B'
-
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-}
-
-// 收取邮件
 const checkEmail = () => {
   emailsStore.checkEmail(emailId.value)
   ElMessage.success('开始收取邮件')
 }
 
-// 确认删除邮箱
 const confirmDelete = () => {
   if (!email.value) return
 
@@ -333,47 +249,38 @@ const confirmDelete = () => {
     emailsStore.deleteEmail(emailId.value)
     ElMessage.success('删除成功')
     router.push('/emails')
-  }).catch(() => {
-    // 取消删除
-  })
+  }).catch(() => {})
 }
 
-// 监听邮箱ID变化，获取邮件记录
 watch(emailId, (newId) => {
   if (newId) {
+    selectedMailFolderFilter.value = 'all'
     emailsStore.fetchMailRecords(newId)
   }
 })
 
-// 处理折叠面板变化
 const handleCollapseChange = (activeNames) => {
   if (activeNames && typeof activeNames === 'number') {
-    // 获取当前展开的邮件
-    const mail = mailRecords.value.find(m => m.id === activeNames)
+    const mail = mailRecords.value.find(item => item.id === activeNames)
     if (mail && mail.has_attachments) {
-      // 加载附件
       loadMailAttachments(mail.id)
     }
   }
 }
 
-// 显示上传对话框
 const showUploadDialog = () => {
   uploadDialogVisible.value = true
   fileList.value = []
 }
 
-// 处理文件变化
 const handleFileChange = (file) => {
   fileList.value = [file]
 }
 
-// 处理超出文件数量限制
 const handleExceed = () => {
   ElMessage.warning('只能上传一个文件')
 }
 
-// 上传邮件文件
 const uploadEmailFile = async () => {
   if (fileList.value.length === 0) {
     ElMessage.warning('请选择要上传的文件')
@@ -381,8 +288,6 @@ const uploadEmailFile = async () => {
   }
 
   const file = fileList.value[0].raw
-
-  // 检查文件扩展名
   const fileName = file.name
   const fileExt = fileName.substring(fileName.lastIndexOf('.')).toLowerCase()
   const allowedExtensions = ['.eml', '.txt', '.msg', '.mbox', '.emlx']
@@ -391,7 +296,6 @@ const uploadEmailFile = async () => {
     return
   }
 
-  // 创建FormData对象
   const formData = new FormData()
   formData.append('file', file)
 
@@ -403,7 +307,7 @@ const uploadEmailFile = async () => {
       {
         headers: {
           'Content-Type': 'multipart/form-data',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          Authorization: `Bearer ${localStorage.getItem('token')}`
         }
       }
     )
@@ -411,7 +315,6 @@ const uploadEmailFile = async () => {
     if (response.data.success) {
       ElMessage.success('邮件文件上传成功')
       uploadDialogVisible.value = false
-      // 刷新邮件列表
       emailsStore.fetchMailRecords(emailId.value)
     } else {
       ElMessage.error(response.data.error || '上传失败')
@@ -424,9 +327,18 @@ const uploadEmailFile = async () => {
   }
 }
 
-// 组件挂载时获取邮件记录
+const getFolderLabel = (folder) => getMailFolderCategory(folder).label
+
+const getFolderTagType = (folder) => {
+  const folderKey = getMailFolderCategory(folder).key
+  if (folderKey === 'inbox') return 'primary'
+  if (folderKey === 'junk') return 'danger'
+  return 'info'
+}
+
 onMounted(() => {
   if (emailId.value) {
+    selectedMailFolderFilter.value = 'all'
     emailsStore.fetchMailRecords(emailId.value)
   }
 })
@@ -452,14 +364,6 @@ onMounted(() => {
   color: #409eff;
 }
 
-.status-section {
-  margin-bottom: 20px;
-}
-
-.progress-bar {
-  margin-top: 10px;
-}
-
 .email-info {
   margin-bottom: 20px;
 }
@@ -472,6 +376,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
 }
 
 .search-input {
@@ -482,16 +387,64 @@ onMounted(() => {
   padding: 40px 0;
 }
 
+.mail-detail-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.mail-folder-sidebar {
+  width: 148px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mail-folder-item {
+  width: 100%;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #303133;
+}
+
+.mail-folder-item:hover,
+.mail-folder-item.active {
+  border-color: #409eff;
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.mail-detail-list {
+  flex: 1;
+  min-width: 0;
+}
+
 .mail-title {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   width: 100%;
   padding-right: 20px;
+  gap: 16px;
 }
 
 .subject {
   font-weight: bold;
   margin-right: 10px;
+}
+
+.mail-title-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .date {
@@ -505,71 +458,10 @@ onMounted(() => {
   border-radius: 4px;
 }
 
-.mail-info {
-  margin-bottom: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #ebeef5;
-}
-
-.mail-body {
-  white-space: pre-line;
-  word-break: break-word;
-}
-
-.mail-attachments {
-  margin: 10px 0;
-  padding: 10px;
-  background-color: #f0f9eb;
-  border-radius: 4px;
-  border-left: 3px solid #67c23a;
-}
-
-.attachments-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.attachment-item {
-  margin-bottom: 5px;
-}
-
 .attachment-tag {
-  margin-left: 10px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-}
-
-.html-content {
-  max-width: 100%;
-  overflow-x: auto;
-  padding: 10px;
-  background-color: #f8f9fa;
-  border-radius: 4px;
-  line-height: 1.5;
-}
-
-.html-content img {
-  max-width: 100%;
-  height: auto;
-}
-
-.html-content a {
-  color: #409eff;
-  text-decoration: underline;
-}
-
-.html-content table {
-  border-collapse: collapse;
-  margin: 10px 0;
-}
-
-.html-content th,
-.html-content td {
-  border: 1px solid #ddd;
-  padding: 8px;
 }
 
 @media (max-width: 768px) {
@@ -583,12 +475,13 @@ onMounted(() => {
     width: 100%;
     display: flex;
     justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
   .mail-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
   }
 
   .search-input {
@@ -596,9 +489,24 @@ onMounted(() => {
     width: 100%;
   }
 
+  .mail-detail-layout {
+    flex-direction: column;
+  }
+
+  .mail-folder-sidebar {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .mail-title {
     flex-direction: column;
-    gap: 5px;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .mail-title-meta {
+    flex-wrap: wrap;
   }
 }
 </style>

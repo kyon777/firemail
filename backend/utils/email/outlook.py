@@ -6,6 +6,7 @@ import imaplib
 import email
 import requests
 import time
+import re
 
 from .common import (
     decode_mime_words,
@@ -23,9 +24,62 @@ class OutlookMailHandler:
         'SENT': ['sentitems', 'Sent Items', 'Sent', '已发送'],
         'DRAFTS': ['drafts', 'Drafts', '草稿箱'],
         'TRASH': ['deleteditems', 'Deleted Items', 'Trash', '已删除'],
-        'SPAM': ['junkemail', 'Junk E-mail', 'Spam', '垃圾邮件'],
+        'SPAM': ['junkemail', 'Junk', 'Junk E-mail', 'Spam', '垃圾邮件'],
         'ARCHIVE': ['archive', 'Archive', '归档']
     }
+
+    @classmethod
+    def _extract_folder_names(cls, folders):
+        folder_list = []
+
+        for folder in folders or []:
+            if isinstance(folder, bytes):
+                folder = folder.decode('utf-8', errors='ignore')
+
+            folder_name = None
+            match = re.search(r'\)\s+"[^"]+"\s+(.+)$', folder)
+            if match:
+                folder_name = match.group(1).strip()
+            else:
+                parts = folder.rsplit(' ', 1)
+                folder_name = parts[-1].strip() if parts else folder.strip()
+
+            if folder_name.startswith('"') and folder_name.endswith('"'):
+                folder_name = folder_name[1:-1]
+
+            if folder_name and folder_name not in ['.', '..']:
+                folder_list.append(folder_name)
+
+        return folder_list
+
+    @classmethod
+    def resolve_folder_name(cls, mail, folder):
+        requested_folder = (folder or 'inbox').strip()
+
+        try:
+            status, folders = mail.list()
+            if status != 'OK':
+                return requested_folder
+
+            available_folders = cls._extract_folder_names(folders)
+            requested_lower = requested_folder.lower()
+
+            for available in available_folders:
+                if available.lower() == requested_lower:
+                    return available
+
+            for aliases in cls.DEFAULT_FOLDERS.values():
+                alias_lowers = {alias.lower() for alias in aliases}
+                if requested_lower not in alias_lowers:
+                    continue
+
+                for available in available_folders:
+                    if available.lower() in alias_lowers:
+                        return available
+        except Exception as exc:
+            logger.warning(f"解析Outlook文件夹名称失败: {exc}")
+
+        return requested_folder
 
     def __init__(self, email_address, access_token):
         """初始化Outlook处理器"""
@@ -222,15 +276,20 @@ class OutlookMailHandler:
                 mail.authenticate('XOAUTH2', lambda x: auth_string)
 
                 # 选择文件夹
-                mail.select('inbox')
-                callback(20, folder)
+                resolved_folder = OutlookMailHandler.resolve_folder_name(mail, folder)
+                select_target = f'"{resolved_folder}"' if ' ' in resolved_folder else resolved_folder
+                select_status, _ = mail.select(select_target)
+                if select_status != 'OK':
+                    logger.error(f"选择Outlook文件夹失败: requested={folder}, resolved={resolved_folder}, status={select_status}")
+                    continue
+                callback(20, resolved_folder)
 
                 # 定义搜索条件
                 if last_check_time:
                     # 将上次检查时间转换为IMAP日期格式 (DD-MMM-YYYY)
                     search_date = format_date_for_imap_search(last_check_time)
                     search_cmd = f'(SINCE "{search_date}")'
-                    logger.info(f"搜索{search_date}之后的邮件")
+                    logger.info(f"在 {resolved_folder} 中搜索{search_date}之后的邮件")
                     status, data = mail.search(None, search_cmd)
                 else:
                     # 获取最近的100封邮件
@@ -253,7 +312,7 @@ class OutlookMailHandler:
                 for i, mail_id in enumerate(mail_ids):
                     # 更新进度
                     progress = int(20 + (i / total_mails) * 70) if total_mails > 0 else 90
-                    callback(progress, folder)
+                    callback(progress, resolved_folder)
 
                     try:
                         # 获取邮件
@@ -299,6 +358,7 @@ class OutlookMailHandler:
                             'sender': sender,
                             'received_time': received_time,
                             'content': content,
+                            'folder': resolved_folder,
                             'mail_key': mail_key  # 添加唯一标识，用于后续去重
                         })
 
@@ -306,7 +366,7 @@ class OutlookMailHandler:
                         logger.error(f"处理邮件ID {mail_id} 时出错: {str(e)}")
 
                 # 成功获取邮件，跳出重试循环
-                callback(90, folder)
+                callback(90, resolved_folder)
                 break
 
             except imaplib.IMAP4.error as e:
@@ -325,6 +385,51 @@ class OutlookMailHandler:
                     pass
 
         return mail_records
+
+    @classmethod
+    def fetch_emails_from_folders(
+        cls,
+        email_address,
+        access_token,
+        folders=None,
+        callback=None,
+        last_check_time=None,
+        folder_last_check_times=None,
+    ):
+        target_folders = folders or ['inbox', 'junkemail']
+        combined_records = []
+        seen_mail_keys = set()
+
+        for folder in target_folders:
+            effective_last_check_time = last_check_time
+            if folder_last_check_times and folder in folder_last_check_times:
+                effective_last_check_time = folder_last_check_times[folder]
+
+            folder_records = cls.fetch_emails(
+                email_address,
+                access_token,
+                folder=folder,
+                callback=callback,
+                last_check_time=effective_last_check_time,
+            )
+
+            for record in folder_records:
+                mail_key = record.get('mail_key')
+                if not mail_key:
+                    received_time = record.get('received_time')
+                    if hasattr(received_time, 'isoformat'):
+                        received_time = received_time.isoformat()
+                    mail_key = f"{record.get('subject', '')}|{record.get('sender', '')}|{received_time or 'unknown'}"
+
+                if mail_key in seen_mail_keys:
+                    continue
+
+                seen_mail_keys.add(mail_key)
+                record.setdefault('folder', folder)
+                record['mail_key'] = mail_key
+                combined_records.append(record)
+
+        return combined_records
 
     @staticmethod
     def check_mail(email_info, db, progress_callback=None):

@@ -163,7 +163,7 @@ export const useEmailsStore = defineStore('emails', {
       this.error = null;
 
       try {
-        console.log('???????????????', importData);
+        console.log('批量导入邮箱：', importData);
         if (!websocket.isConnected) {
           const response = await api.emails.import(importData);
           return response.data;
@@ -186,7 +186,7 @@ export const useEmailsStore = defineStore('emails', {
 
           timeoutId = setTimeout(() => {
             cleanup();
-            reject(new Error('????????????????????????????????????????????????'));
+            reject(new Error('等待批量导入结果超时，请检查网络连接或稍后重试'));
           }, 30000);
 
           websocket.onMessage('import_result', handleResult);
@@ -197,11 +197,11 @@ export const useEmailsStore = defineStore('emails', {
 
           if (sent === false && websocket.isAuthenticated) {
             cleanup();
-            reject(new Error('??????????????????????????????????????????'));
+            reject(new Error('批量导入请求发送失败，请等待 WebSocket 认证完成后重试'));
           }
         });
       } catch (error) {
-        this.error = '??????????????????';
+        this.error = '批量导入邮箱失败';
         throw error;
       } finally {
         this.loading = false;

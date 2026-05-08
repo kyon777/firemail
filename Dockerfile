@@ -6,10 +6,8 @@ COPY frontend /app/frontend
 
 # Build frontend
 WORKDIR /app/frontend
-RUN corepack enable pnpm && \
-    pnpm install && \
-    pnpm install dayjs && \
-    pnpm build
+RUN npm install && \
+    npm run build
 
 # --- Python Dependencies Stage ---
 FROM python:3.10.17-slim-bullseye AS python-deps
