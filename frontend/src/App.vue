@@ -65,9 +65,6 @@
           <el-menu-item index="/admin/users" v-if="isAdmin">
             <el-icon><UserFilled /></el-icon>用户管理
           </el-menu-item>
-          <el-menu-item index="/about">
-            <el-icon><InfoFilled /></el-icon>关于
-          </el-menu-item>
         </el-menu>
 
         <el-main>
@@ -110,7 +107,7 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useStore } from 'vuex'
 import { ElConfigProvider, ElMessage } from 'element-plus'
-import { ArrowDown, Message, HomeFilled, InfoFilled, UserFilled, Setting, Upload } from '@element-plus/icons-vue'
+import { ArrowDown, Message, HomeFilled, UserFilled, Setting, Upload } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import websocket from '@/services/websocket'

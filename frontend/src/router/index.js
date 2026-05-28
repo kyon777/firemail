@@ -76,11 +76,6 @@ const router = createRouter({
       beforeEnter: requireAdmin
     },
     {
-      path: '/about',
-      name: 'about',
-      component: () => import('@/views/AboutView.vue')
-    },
-    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/auth/LoginView.vue'),
