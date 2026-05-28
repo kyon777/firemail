@@ -11,6 +11,9 @@ from utils.import_parser import normalize_outlook_import_line
 # 配置日志
 logger = logging.getLogger('websocket')
 
+EMAIL_CHECK_ACTION = 'email_check'
+EMAIL_CHECK_DAILY_LIMIT = 50
+
 class WebSocketHandler:
     def __init__(self):
         self.db = None
@@ -41,6 +44,24 @@ class WebSocketHandler:
             'import_emails': self.handle_import_emails_message,
         }
     
+    def get_client_ip(self, websocket):
+        """获取 WebSocket 客户端 IP，优先使用代理头。"""
+        headers = getattr(websocket, 'request_headers', {}) or {}
+        forwarded_for = headers.get('X-Forwarded-For', '')
+        if forwarded_for:
+            first_ip = forwarded_for.split(',')[0].strip()
+            if first_ip:
+                return first_ip
+
+        real_ip = headers.get('X-Real-IP', '').strip()
+        if real_ip:
+            return real_ip
+
+        remote_address = getattr(websocket, 'remote_address', None)
+        if isinstance(remote_address, (tuple, list)) and remote_address:
+            return remote_address[0]
+        return remote_address or 'unknown'
+
     async def register_client(self, websocket, path):
         """注册新客户端连接"""
         try:
@@ -260,8 +281,29 @@ class WebSocketHandler:
                     'message': '所有邮箱都在处理中，请稍后再试'
                 }))
                 return
+
+            limit_state = self.db.consume_ip_daily_limit(
+                self.get_client_ip(websocket),
+                EMAIL_CHECK_ACTION,
+                amount=len(valid_ids),
+                daily_limit=EMAIL_CHECK_DAILY_LIMIT,
+            )
+            if not limit_state.get('allowed'):
+                await websocket.send(json.dumps({
+                    'type': 'warning',
+                    'status': 'rate_limited',
+                    'message': '每天最多只能检查50个邮箱验证码，请明天再试',
+                    'limit': limit_state.get('limit', EMAIL_CHECK_DAILY_LIMIT),
+                    'remaining': limit_state.get('remaining', 0),
+                    'reset_at': limit_state.get('reset_at')
+                }))
+                logger.warning(
+                    f"WebSocket邮箱检查被限流: IP={self.get_client_ip(websocket)}, 请求数量={len(valid_ids)}, "
+                    f"剩余额度={limit_state.get('remaining')}"
+                )
+                return
             
-            # 定义详细的进度回调函数
+            # ???????????
             def progress_callback(email_id, progress, message, status=None):
                 # 获取邮箱信息用于更详细的日志
                 email_info = self.db.get_email_by_id(email_id)

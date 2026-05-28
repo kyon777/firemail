@@ -5,7 +5,7 @@ import logging
 import hashlib
 import secrets
 from typing import List, Dict, Optional, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import traceback
 from utils.email.logger import logger, log_progress
 
@@ -155,6 +155,7 @@ class Database:
             # 检查并添加新字段
             self._ensure_mail_pool_table()
             self._ensure_mail_pool_meta_table()
+            self._ensure_ip_rate_limit_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password_hash', 'TEXT NOT NULL')
 
@@ -201,6 +202,7 @@ class Database:
 
             self._ensure_mail_pool_table()
             self._ensure_mail_pool_meta_table()
+            self._ensure_ip_rate_limit_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password', 'TEXT')
             self._check_and_add_column('users', 'password_hash', 'TEXT')
@@ -264,6 +266,193 @@ class Database:
             "INSERT OR IGNORE INTO mail_pool_meta (key, value) VALUES ('pool_version', '0')"
         )
         self.conn.commit()
+
+    def _ensure_ip_rate_limit_table(self):
+        """创建/补齐 IP 限流表，用于注册验证失败封禁和每日查码次数限制。"""
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS ip_rate_limits (
+                ip TEXT NOT NULL,
+                action TEXT NOT NULL,
+                window_start TEXT NOT NULL,
+                count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                blocked_until TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ip, action)
+            )
+        """)
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_ip_rate_limits_blocked_until ON ip_rate_limits(blocked_until)')
+        self.conn.commit()
+
+    @staticmethod
+    def _parse_limit_time(value):
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            try:
+                return datetime.strptime(str(value), '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                return None
+
+    @staticmethod
+    def _format_limit_time(value):
+        return value.replace(microsecond=0).isoformat()
+
+    def _get_or_create_ip_limit_row(self, ip, action, now=None):
+        self._ensure_ip_rate_limit_table()
+        ip = (ip or 'unknown').strip() or 'unknown'
+        action = (action or 'default').strip() or 'default'
+        now = now or datetime.utcnow()
+        cursor = self.conn.execute(
+            "SELECT * FROM ip_rate_limits WHERE ip = ? AND action = ?",
+            (ip, action)
+        )
+        row = cursor.fetchone()
+        if row:
+            window_start = self._parse_limit_time(row['window_start']) or now
+            if now - window_start < timedelta(hours=24):
+                return dict(row), window_start
+
+        window_start_text = self._format_limit_time(now)
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO ip_rate_limits (
+                ip, action, window_start, count, failed_count, blocked_until, updated_at
+            ) VALUES (?, ?, ?, 0, 0, NULL, CURRENT_TIMESTAMP)
+            """,
+            (ip, action, window_start_text)
+        )
+        self.conn.commit()
+        cursor = self.conn.execute(
+            "SELECT * FROM ip_rate_limits WHERE ip = ? AND action = ?",
+            (ip, action)
+        )
+        return dict(cursor.fetchone()), now
+
+    def is_ip_blocked(self, ip, action, now=None):
+        """检查指定 IP 在某动作上是否仍处于封禁期。"""
+        now = now or datetime.utcnow()
+        ip = (ip or 'unknown').strip() or 'unknown'
+        action = (action or 'default').strip() or 'default'
+        row, window_start = self._get_or_create_ip_limit_row(ip, action, now=now)
+        blocked_until = self._parse_limit_time(row.get('blocked_until'))
+        if blocked_until and blocked_until > now:
+            return {
+                'blocked': True,
+                'blocked_until': self._format_limit_time(blocked_until),
+                'failed_count': int(row.get('failed_count') or 0),
+                'reset_at': self._format_limit_time(window_start + timedelta(hours=24)),
+            }
+
+        if blocked_until and blocked_until <= now:
+            self.conn.execute(
+                """
+                UPDATE ip_rate_limits
+                SET failed_count = 0, blocked_until = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE ip = ? AND action = ?
+                """,
+                (ip, action)
+            )
+            self.conn.commit()
+
+        return {
+            'blocked': False,
+            'blocked_until': None,
+            'failed_count': 0 if blocked_until else int(row.get('failed_count') or 0),
+            'reset_at': self._format_limit_time(window_start + timedelta(hours=24)),
+        }
+
+    def record_ip_failure(self, ip, action, block_after=3, block_hours=24, now=None):
+        """记录一次失败；失败次数达到阈值后封禁 IP。"""
+        now = now or datetime.utcnow()
+        ip = (ip or 'unknown').strip() or 'unknown'
+        action = (action or 'default').strip() or 'default'
+        blocked_state = self.is_ip_blocked(ip, action, now=now)
+        if blocked_state['blocked']:
+            return blocked_state
+
+        row, window_start = self._get_or_create_ip_limit_row(ip, action, now=now)
+        failed_count = int(row.get('failed_count') or 0) + 1
+        blocked_until = None
+        if failed_count >= int(block_after or 3):
+            blocked_until = now + timedelta(hours=int(block_hours or 24))
+
+        self.conn.execute(
+            """
+            UPDATE ip_rate_limits
+            SET failed_count = ?, blocked_until = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE ip = ? AND action = ?
+            """,
+            (
+                failed_count,
+                self._format_limit_time(blocked_until) if blocked_until else None,
+                ip,
+                action,
+            )
+        )
+        self.conn.commit()
+        return {
+            'blocked': blocked_until is not None,
+            'blocked_until': self._format_limit_time(blocked_until) if blocked_until else None,
+            'failed_count': failed_count,
+            'reset_at': self._format_limit_time(window_start + timedelta(hours=24)),
+        }
+
+    def clear_ip_failures(self, ip, action):
+        """验证通过后清空该 IP 在指定动作上的失败计数。"""
+        self._ensure_ip_rate_limit_table()
+        self.conn.execute(
+            """
+            UPDATE ip_rate_limits
+            SET failed_count = 0, blocked_until = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE ip = ? AND action = ?
+            """,
+            (((ip or 'unknown').strip() or 'unknown'), ((action or 'default').strip() or 'default'))
+        )
+        self.conn.commit()
+
+    def consume_ip_daily_limit(self, ip, action, amount=1, daily_limit=50, now=None):
+        """按 IP 消耗每日额度；amount 可表示批量检查的邮箱数量。"""
+        now = now or datetime.utcnow()
+        ip = (ip or 'unknown').strip() or 'unknown'
+        action = (action or 'default').strip() or 'default'
+        amount = max(1, int(amount or 1))
+        daily_limit = max(1, int(daily_limit or 50))
+        row, window_start = self._get_or_create_ip_limit_row(ip, action, now=now)
+        current_count = int(row.get('count') or 0)
+        remaining = max(0, daily_limit - current_count)
+        reset_at = self._format_limit_time(window_start + timedelta(hours=24))
+
+        if amount > remaining:
+            return {
+                'allowed': False,
+                'limit': daily_limit,
+                'count': current_count,
+                'remaining': remaining,
+                'reset_at': reset_at,
+            }
+
+        new_count = current_count + amount
+        self.conn.execute(
+            """
+            UPDATE ip_rate_limits
+            SET count = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE ip = ? AND action = ?
+            """,
+            (new_count, ip, action)
+        )
+        self.conn.commit()
+        return {
+            'allowed': True,
+            'limit': daily_limit,
+            'count': new_count,
+            'remaining': max(0, daily_limit - new_count),
+            'reset_at': reset_at,
+        }
 
     def get_mail_pool_version(self) -> int:
         """读取总邮箱库版本号；缓存层用它判断是否需要重载。"""

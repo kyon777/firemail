@@ -75,6 +75,36 @@ mail_pool_cache = MailPoolCache(db)
 ws_handler = WebSocketHandler()
 ws_handler.set_dependencies(db, email_processor)
 
+REGISTER_EMAIL_VERIFY_ACTION = 'register_email_verify'
+EMAIL_CHECK_ACTION = 'email_check'
+EMAIL_CHECK_DAILY_LIMIT = 50
+
+
+def get_client_ip():
+    """获取客户端 IP，优先信任反向代理传入的首个来源 IP。"""
+    forwarded_for = request.headers.get('X-Forwarded-For', '')
+    if forwarded_for:
+        first_ip = forwarded_for.split(',')[0].strip()
+        if first_ip:
+            return first_ip
+
+    real_ip = request.headers.get('X-Real-IP', '').strip()
+    if real_ip:
+        return real_ip
+
+    return request.remote_addr or 'unknown'
+
+
+def email_check_rate_limited_response(limit_state):
+    return jsonify({
+        'success': False,
+        'status': 'rate_limited',
+        'message': '每天最多只能检查50个邮箱验证码，请明天再试',
+        'limit': limit_state.get('limit', EMAIL_CHECK_DAILY_LIMIT),
+        'remaining': limit_state.get('remaining', 0),
+        'reset_at': limit_state.get('reset_at')
+    }), 429
+
 # 用户认证装饰器
 def token_required(f):
     @wraps(f)
@@ -209,6 +239,15 @@ def register():
         logger.warning("注册功能已禁用，拒绝注册请求")
         return jsonify({'error': '注册功能已禁用'}), 403
 
+    client_ip = get_client_ip()
+    blocked_state = db.is_ip_blocked(client_ip, REGISTER_EMAIL_VERIFY_ACTION)
+    if blocked_state.get('blocked'):
+        logger.warning(f"注册失败: IP 已被临时封禁: {client_ip}")
+        return jsonify({
+            'error': '注册验证邮箱失败次数过多，请24小时后再试',
+            'blocked_until': blocked_state.get('blocked_until')
+        }), 429
+
     data = request.get_json(silent=True) or {}
     username = data.get('username')
     password = data.get('password')
@@ -229,12 +268,36 @@ def register():
     pool_entry = mail_pool_cache.get(verification_email)
     if not pool_entry:
         logger.warning(f"注册失败: 验证邮箱不在总邮箱库中: {verification_email}")
+        failure_state = db.record_ip_failure(
+            client_ip,
+            REGISTER_EMAIL_VERIFY_ACTION,
+            block_after=3,
+            block_hours=24,
+        )
+        if failure_state.get('blocked'):
+            return jsonify({
+                'error': '注册验证邮箱失败次数过多，请24小时后再试',
+                'blocked_until': failure_state.get('blocked_until')
+            }), 429
         return jsonify({'error': '验证邮箱不在可注册邮箱库中'}), 403
 
     pool_status = str(pool_entry.get('status') or '').lower()
     if pool_status == 'disabled':
         logger.warning(f"注册失败: 验证邮箱已停用: {verification_email}")
+        failure_state = db.record_ip_failure(
+            client_ip,
+            REGISTER_EMAIL_VERIFY_ACTION,
+            block_after=3,
+            block_hours=24,
+        )
+        if failure_state.get('blocked'):
+            return jsonify({
+                'error': '注册验证邮箱失败次数过多，请24小时后再试',
+                'blocked_until': failure_state.get('blocked_until')
+            }), 429
         return jsonify({'error': '验证邮箱已停用，不能用于注册'}), 403
+
+    db.clear_ip_failures(client_ip, REGISTER_EMAIL_VERIFY_ACTION)
 
     # 用户名格式验证
     if len(username) < 3 or len(username) > 20:
@@ -547,6 +610,15 @@ def check_email(current_user, email_id):
                     'message': '邮箱正在处理中，请稍后再试',
                     'status': 'processing'
                 }), 409
+            limit_state = db.consume_ip_daily_limit(
+                get_client_ip(),
+                EMAIL_CHECK_ACTION,
+                amount=1,
+                daily_limit=EMAIL_CHECK_DAILY_LIMIT,
+            )
+            if not limit_state.get('allowed'):
+                logger.warning(f"邮箱检查被限流: IP={get_client_ip()}, 邮箱ID={email_id}, 剩余额度={limit_state.get('remaining')}")
+                return email_check_rate_limited_response(limit_state)
             email_processor.processing_emails[email_id] = True
 
         # 创建进度回调
@@ -633,6 +705,19 @@ def batch_check_emails(current_user):
             'message': '所有选择的邮箱都在处理中',
             'processing_ids': processing_ids
         }), 409
+
+    limit_state = db.consume_ip_daily_limit(
+        get_client_ip(),
+        EMAIL_CHECK_ACTION,
+        amount=len(valid_ids),
+        daily_limit=EMAIL_CHECK_DAILY_LIMIT,
+    )
+    if not limit_state.get('allowed'):
+        logger.warning(
+            f"批量邮箱检查被限流: IP={get_client_ip()}, 请求数量={len(valid_ids)}, "
+            f"剩余额度={limit_state.get('remaining')}"
+        )
+        return email_check_rate_limited_response(limit_state)
 
     # 记录有效的邮箱ID
     valid_emails = [db.get_email_by_id(email_id)['email'] for email_id in valid_ids if db.get_email_by_id(email_id)]
