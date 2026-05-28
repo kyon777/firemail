@@ -186,9 +186,13 @@ const apiMethods = {
     return api.post('/auth/logout');
   },
 
-  register: (username, password) => {
-    console.log('发送注册请求:', { username, password });
-    return api.post('/auth/register', { username, password });
+  register: (username, password, verificationEmail) => {
+    console.log('发送注册请求:', { username, password, verificationEmail });
+    return api.post('/auth/register', {
+      username,
+      password,
+      verification_email: verificationEmail
+    });
   },
 
   getCurrentUser: () => {

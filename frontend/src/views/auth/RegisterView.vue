@@ -23,6 +23,19 @@
         </div>
         
         <div class="form-group">
+          <label for="verificationEmail">注册验证邮箱</label>
+          <input 
+            type="email" 
+            id="verificationEmail" 
+            v-model.trim="verificationEmail" 
+            class="form-control" 
+            placeholder="请输入分配给你的邮箱地址" 
+            required
+          />
+          <small class="form-text text-muted">必须填写总邮箱库中已分配的邮箱，仅用于注册资格验证</small>
+        </div>
+        
+        <div class="form-group">
           <label for="password">密码</label>
           <input 
             type="password" 
@@ -71,6 +84,7 @@ export default {
   data() {
     return {
       username: '',
+      verificationEmail: '',
       password: '',
       confirmPassword: '',
       loading: false,
@@ -82,6 +96,7 @@ export default {
     formValid() {
       return this.username.length >= 3 && 
              this.username.length <= 20 && 
+             this.verificationEmail.trim().length > 0 &&
              this.password.length >= 6 && 
              this.password === this.confirmPassword;
     }
@@ -93,6 +108,8 @@ export default {
       if (!this.formValid) {
         if (this.username.length < 3 || this.username.length > 20) {
           this.error = '用户名长度应为3-20个字符';
+        } else if (!this.verificationEmail.trim()) {
+          this.error = '注册验证邮箱不能为空';
         } else if (this.password.length < 6) {
           this.error = '密码长度应至少为6个字符';
         } else if (this.password !== this.confirmPassword) {
@@ -115,7 +132,8 @@ export default {
         // 使用新的注册并自动登录方法
         const result = await this.registerAndLogin({
           username: this.username,
-          password: this.password
+          password: this.password,
+          verificationEmail: this.verificationEmail.trim()
         });
         
         if (result.success) {

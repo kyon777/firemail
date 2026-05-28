@@ -150,11 +150,11 @@ const actions = {
   },
 
   // 用户注册
-  async register({ commit }, { username, password }) {
+  async register({ commit }, { username, password, verificationEmail }) {
     commit('AUTH_REQUEST');
     try {
       console.log('发送注册请求:', username);
-      const response = await api.register(username, password);
+      const response = await api.register(username, password, verificationEmail);
       commit('CLEAR_ERROR');
 
       console.log('注册成功，返回数据:', response.data);
@@ -167,10 +167,10 @@ const actions = {
   },
 
   // 注册后自动登录
-  async registerAndLogin({ dispatch, commit }, { username, password }) {
+  async registerAndLogin({ dispatch, commit }, { username, password, verificationEmail }) {
     try {
       // 先进行注册
-      await dispatch('register', { username, password });
+      await dispatch('register', { username, password, verificationEmail });
 
       // 注册成功后等待一秒再尝试登录，给后端处理时间
       console.log('注册成功，准备自动登录...');

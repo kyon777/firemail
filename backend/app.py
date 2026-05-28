@@ -209,15 +209,32 @@ def register():
         logger.warning("注册功能已禁用，拒绝注册请求")
         return jsonify({'error': '注册功能已禁用'}), 403
 
-    data = request.json
+    data = request.get_json(silent=True) or {}
     username = data.get('username')
     password = data.get('password')
+    verification_email = (
+        data.get('verification_email') or data.get('verificationEmail') or ''
+    ).strip().lower()
 
-    logger.info(f"注册用户名: {username}")
+    logger.info(f"注册用户名: {username}, 验证邮箱: {verification_email or '未填写'}")
 
     if not username or not password:
         logger.warning("注册失败: 用户名或密码为空")
         return jsonify({'error': '用户名和密码不能为空'}), 400
+
+    if not verification_email:
+        logger.warning("注册失败: 未填写总邮箱库验证邮箱")
+        return jsonify({'error': '注册验证邮箱不能为空'}), 400
+
+    pool_entry = mail_pool_cache.get(verification_email)
+    if not pool_entry:
+        logger.warning(f"注册失败: 验证邮箱不在总邮箱库中: {verification_email}")
+        return jsonify({'error': '验证邮箱不在可注册邮箱库中'}), 403
+
+    pool_status = str(pool_entry.get('status') or '').lower()
+    if pool_status == 'disabled':
+        logger.warning(f"注册失败: 验证邮箱已停用: {verification_email}")
+        return jsonify({'error': '验证邮箱已停用，不能用于注册'}), 403
 
     # 用户名格式验证
     if len(username) < 3 or len(username) > 20:
