@@ -96,6 +96,7 @@
                 <th>类型</th>
                 <th>导入/绑定时间</th>
                 <th>最后检查时间</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -105,11 +106,40 @@
                 <td>{{ email.mail_type || '未知' }}</td>
                 <td>{{ formatDate(email.created_at) }}</td>
                 <td>{{ formatDate(email.last_check_time) }}</td>
+                <td>
+                  <button
+                    class="btn btn-sm btn-primary"
+                    @click="openEmailRecordsPanel(email)"
+                  >
+                    查看邮件
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
 
-          <p v-else class="text-center">该用户暂无邮箱</p>
+          <div v-if="selectedEmailForRecords" class="mail-records-panel">
+            <div class="records-header">
+              <h3>邮件记录 - {{ selectedEmailForRecords.email }}</h3>
+              <button class="btn btn-sm btn-secondary" @click="closeEmailRecordsPanel">收起</button>
+            </div>
+            <div v-if="mailRecordsLoading" class="text-center text-muted">邮件记录加载中...</div>
+            <div v-else-if="mailRecordsError" class="alert alert-danger">{{ mailRecordsError }}</div>
+            <div v-else-if="selectedEmailRecords.length === 0" class="text-center text-muted">该邮箱暂无邮件记录</div>
+            <div v-else class="mail-records-list">
+              <div v-for="record in selectedEmailRecords" :key="record.id" class="mail-record-card">
+                <div class="mail-record-title">{{ record.subject || '无主题' }}</div>
+                <div class="mail-record-meta">
+                  <span>发件人：{{ record.sender || '未知' }}</span>
+                  <span>文件夹：{{ record.folder || '未知' }}</span>
+                  <span>时间：{{ formatDate(record.received_time) }}</span>
+                </div>
+                <pre class="mail-record-content">{{ formatMailContent(record.content) }}</pre>
+              </div>
+            </div>
+          </div>
+
+          <p v-if="selectedUserEmails.length === 0" class="text-center">该用户暂无邮箱</p>
 
           <div class="form-actions">
             <button type="button" class="btn btn-secondary" @click="closeUserEmailsModal">关闭</button>
@@ -259,6 +289,8 @@
 </template>
 
 <script>
+import api from '@/services/api'
+
 export default {
   name: 'UsersView',
   data() {
@@ -291,6 +323,10 @@ export default {
       selectedUser: null,
       showUserEmailsModal: false,
       selectedUserEmails: [],
+      selectedEmailForRecords: null,
+      selectedEmailRecords: [],
+      mailRecordsLoading: false,
+      mailRecordsError: null,
       resetPasswordData: {
         newPassword: '',
         confirmPassword: ''
@@ -381,6 +417,7 @@ export default {
     openUserEmailsModal(user) {
       this.selectedUser = user;
       this.selectedUserEmails = Array.isArray(user.emails) ? user.emails : [];
+      this.closeEmailRecordsPanel();
       this.showUserEmailsModal = true;
     },
 
@@ -388,6 +425,38 @@ export default {
       this.showUserEmailsModal = false;
       this.selectedUser = null;
       this.selectedUserEmails = [];
+      this.closeEmailRecordsPanel();
+    },
+
+    async openEmailRecordsPanel(email) {
+      this.selectedEmailForRecords = email;
+      this.selectedEmailRecords = [];
+      this.mailRecordsError = null;
+      this.mailRecordsLoading = true;
+
+      try {
+        const response = await api.getMailRecords(email.id);
+        this.selectedEmailRecords = Array.isArray(response.data) ? response.data : [];
+      } catch (error) {
+        this.mailRecordsError = error?.response?.data?.error || error.message || '获取邮件记录失败';
+      } finally {
+        this.mailRecordsLoading = false;
+      }
+    },
+
+    closeEmailRecordsPanel() {
+      this.selectedEmailForRecords = null;
+      this.selectedEmailRecords = [];
+      this.mailRecordsLoading = false;
+      this.mailRecordsError = null;
+    },
+
+    formatMailContent(content) {
+      if (!content) return '';
+      if (typeof content === 'string') return content;
+      if (content.text) return content.text;
+      if (content.html) return content.html;
+      return JSON.stringify(content, null, 2);
     },
 
     // 添加用户
@@ -766,6 +835,69 @@ export default {
 .email-summary-table th {
   background-color: #f8f8f8;
   font-weight: 600;
+}
+
+.mail-records-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.records-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.records-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.mail-records-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.mail-record-card {
+  padding: 12px;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.mail-record-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.mail-record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.mail-record-content {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 10px;
+  border-radius: 4px;
+  background: #f5f5f5;
+  font-size: 13px;
 }
 
 .modal-header {

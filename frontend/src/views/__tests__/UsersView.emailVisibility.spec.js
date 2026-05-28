@@ -17,4 +17,18 @@ describe('UsersView admin email visibility', () => {
     expect(usersView).not.toContain('checkEmails(')
     expect(usersView).not.toContain('开始收码')
   })
+
+  it('allows admins to open a user mailbox and view its mail records without triggering checks', () => {
+    const usersView = readFileSync(resolve(root, 'src/views/admin/UsersView.vue'), 'utf8')
+
+    expect(usersView).toContain('mail-records-panel')
+    expect(usersView).toContain('selectedEmailRecords')
+    expect(usersView).toContain('openEmailRecordsPanel')
+    expect(usersView).toContain('api.getMailRecords')
+    expect(usersView).toContain('mail-record-content')
+
+    expect(usersView).not.toContain('batchCheckEmails')
+    expect(usersView).not.toContain('check_emails')
+  })
+
 })
