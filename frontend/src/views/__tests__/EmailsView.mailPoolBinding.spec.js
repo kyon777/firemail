@@ -21,6 +21,14 @@ const mockStore = {
   fetchMailRecords: vi.fn(),
   addEmail: vi.fn(),
   bindPoolEmail: vi.fn().mockResolvedValue({ email_id: 7 }),
+  batchBindPoolEmails: vi.fn().mockResolvedValue({
+    total: 2,
+    summary: { bound: 1, not_found: 1 },
+    results: [
+      { line: 1, email: 'a@outlook.com', status: 'bound', message: '\u90ae\u7bb1\u7ed1\u5b9a\u6210\u529f' },
+      { line: 2, email: 'missing@outlook.com', status: 'not_found', message: '\u8be5\u90ae\u7bb1\u4e0d\u5728\u53ef\u7ed1\u5b9a\u90ae\u7bb1\u5e93\u4e2d' }
+    ]
+  }),
   importEmails: vi.fn(),
   getEmailPassword: vi.fn(),
   updateEmail: vi.fn()
@@ -89,7 +97,7 @@ const mountView = () => mount(EmailsView, {
       'el-form-item': { template: '<div><slot /></div>' },
       'el-select': true,
       'el-option': true,
-      'el-input': true,
+      'el-input': { template: '<textarea />' },
       'el-input-number': true,
       'el-switch': true,
       'el-icon': true,
@@ -108,7 +116,25 @@ describe('EmailsView mail pool binding', () => {
   it('shows bind email entry instead of admin import controls for normal users', () => {
     const wrapper = mountView()
 
-    expect(wrapper.text()).toContain('绑定邮箱')
-    expect(wrapper.text()).not.toContain('批量导入')
+    expect(wrapper.text()).toContain('\u7ed1\u5b9a\u90ae\u7bb1')
+    expect(wrapper.text()).not.toContain('\u6279\u91cf\u5bfc\u5165')
+  })
+
+  it('shows batch bind entry for normal users', () => {
+    const wrapper = mountView()
+
+    expect(wrapper.text()).toContain('\u6279\u91cf\u7ed1\u5b9a')
+    expect(wrapper.text()).toContain('\u4e00\u884c\u4e00\u4e2a\u90ae\u7bb1')
+  })
+
+  it('submits multiline pool emails and keeps result summary visible', async () => {
+    const wrapper = mountView()
+
+    wrapper.vm.batchBindForm.emails = 'a@outlook.com\nmissing@outlook.com'
+    await wrapper.vm.handleBatchBindPoolEmails()
+
+    expect(mockStore.batchBindPoolEmails).toHaveBeenCalledWith('a@outlook.com\nmissing@outlook.com')
+    expect(wrapper.vm.batchBindResult.summary.bound).toBe(1)
+    expect(wrapper.vm.batchBindResult.summary.not_found).toBe(1)
   })
 })

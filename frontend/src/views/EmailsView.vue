@@ -12,6 +12,15 @@
               <el-button v-if="isAdmin" type="warning" @click="goToImportPage" :icon="Upload" class="hover-scale">
                 批量导入
               </el-button>
+              <el-button
+                v-if="!isAdmin"
+                type="warning"
+                @click="showBatchBindDialog"
+                :icon="Upload"
+                class="hover-scale"
+              >
+                批量绑定
+              </el-button>
               <el-button type="success" @click="showAddEmailDialog" :icon="Plus" class="hover-scale">
                 {{ isAdmin ? '添加邮箱' : '绑定邮箱' }}
               </el-button>
@@ -286,6 +295,64 @@
       </el-dialog>
 
       <!-- 邮件列表对话框 -->
+      <!-- 普通用户批量绑定总邮箱库 -->
+      <el-dialog
+        v-model="batchBindDialogVisible"
+        title="批量绑定邮箱"
+        width="760px"
+        :close-on-click-modal="false"
+        class="batch-bind-dialog"
+        destroy-on-close
+      >
+        <div class="batch-bind-panel">
+          <p class="import-help batch-bind-help">
+            支持一行一个邮箱。系统只会用你填写的邮箱地址去总邮箱库匹配，命中后直接绑定到你的邮箱列表，不会展示总库里的其它邮箱。
+          </p>
+          <el-form :model="batchBindForm" label-width="110px">
+            <el-form-item label="邮箱列表">
+              <el-input
+                v-model="batchBindForm.emails"
+                type="textarea"
+                :rows="10"
+                placeholder="例如：
+first@outlook.com
+second@outlook.com"
+              />
+            </el-form-item>
+          </el-form>
+
+          <div v-if="batchBindResult" class="batch-bind-result">
+            <div class="result-summary-grid">
+              <div class="summary-card success"><span class="summary-value">{{ batchBindResult.summary?.bound || 0 }}</span><span class="summary-label">新绑定</span></div>
+              <div class="summary-card info"><span class="summary-value">{{ batchBindResult.summary?.already_bound || 0 }}</span><span class="summary-label">已绑定</span></div>
+              <div class="summary-card warning"><span class="summary-value">{{ batchBindResult.summary?.not_found || 0 }}</span><span class="summary-label">未找到</span></div>
+              <div class="summary-card danger"><span class="summary-value">{{ batchBindResult.summary?.assigned_to_other || 0 }}</span><span class="summary-label">已被占用</span></div>
+            </div>
+            <el-table :data="batchBindResult.results || []" size="small" border stripe max-height="260" class="batch-bind-table">
+              <el-table-column prop="line" label="行" width="70" />
+              <el-table-column prop="email" label="邮箱" min-width="240" show-overflow-tooltip />
+              <el-table-column label="状态" width="130">
+                <template #default="scope">
+                  <el-tag :type="getBatchBindStatusType(scope.row.status)" effect="plain">
+                    {{ getBatchBindStatusLabel(scope.row.status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </div>
+
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="batchBindDialogVisible = false">关闭</el-button>
+            <el-button type="primary" @click="handleBatchBindPoolEmails" :loading="batchBinding">
+              开始绑定
+            </el-button>
+          </span>
+        </template>
+      </el-dialog>
+
       <el-dialog
         v-model="mailListDialogVisible"
         title="邮件列表"
@@ -546,6 +613,9 @@ const mailContentDialogVisible = ref(false)
 const mailListDialogVisible = ref(false)
 const addingEmail = ref(false)
 const importing = ref(false)
+const batchBinding = ref(false)
+const batchBindDialogVisible = ref(false)
+const batchBindResult = ref(null)
 const selectedMailFolderFilter = ref('all')
 
 // 添加邮箱表单引用
@@ -598,6 +668,10 @@ const addEmailForm = ref({
 const batchImport = reactive({
   data: '',
   mailType: 'outlook'
+})
+
+const batchBindForm = reactive({
+  emails: ''
 })
 
 // 批量导入验证规则
@@ -841,6 +915,12 @@ const showAddEmailDialog = () => {
   addEmailActiveTab.value = 'single'
 }
 
+const showBatchBindDialog = () => {
+  batchBindForm.emails = ''
+  batchBindResult.value = null
+  batchBindDialogVisible.value = true
+}
+
 const goToImportPage = () => {
   router.push('/import')
 }
@@ -885,6 +965,55 @@ const handleBindPoolEmail = async () => {
     ElMessage.error('绑定邮箱失败: ' + message)
   } finally {
     addingEmail.value = false
+  }
+}
+
+const getBatchBindStatusType = (status) => {
+  if (status === 'bound') return 'success'
+  if (status === 'already_bound') return 'info'
+  if (status === 'not_found') return 'warning'
+  if (status === 'assigned_to_other' || status === 'disabled') return 'danger'
+  return 'info'
+}
+
+const getBatchBindStatusLabel = (status) => {
+  const labels = {
+    bound: '新绑定',
+    already_bound: '已绑定',
+    not_found: '未找到',
+    assigned_to_other: '已被占用',
+    disabled: '已禁用',
+    invalid_email: '格式错误',
+    unsupported_type: '不支持',
+    conflict: '冲突',
+    error: '失败'
+  }
+  return labels[status] || status
+}
+
+const handleBatchBindPoolEmails = async () => {
+  const rawEmails = batchBindForm.emails.trim()
+  if (!rawEmails) {
+    ElMessage.warning('请先输入邮箱列表')
+    return
+  }
+
+  batchBinding.value = true
+  try {
+    const result = await emailsStore.batchBindPoolEmails(rawEmails)
+    batchBindResult.value = result
+    const bound = result?.summary?.bound || 0
+    const alreadyBound = result?.summary?.already_bound || 0
+    const notFound = result?.summary?.not_found || 0
+    const assigned = result?.summary?.assigned_to_other || 0
+    ElMessage.success(`批量绑定完成：新绑定 ${bound} 个，已绑定 ${alreadyBound} 个，未找到 ${notFound} 个，已占用 ${assigned} 个`)
+    await refreshEmails()
+  } catch (error) {
+    console.error('批量绑定邮箱失败:', error)
+    const message = error.response?.data?.error || error.message || '未知错误'
+    ElMessage.error('批量绑定邮箱失败: ' + message)
+  } finally {
+    batchBinding.value = false
   }
 }
 
@@ -1653,6 +1782,60 @@ onMounted(() => {
 
 .hover-scale:hover:not(:disabled) {
   transform: scale(1.05);
+}
+
+
+.batch-bind-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.batch-bind-help {
+  border-left: 4px solid #409eff;
+}
+
+.batch-bind-result {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.result-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summary-card {
+  border-radius: 14px;
+  padding: 14px;
+  background: #f5f7fa;
+  border: 1px solid #ebeef5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-card.success { background: #f0f9eb; border-color: #b3e19d; }
+.summary-card.info { background: #f4f4f5; border-color: #d3d4d6; }
+.summary-card.warning { background: #fdf6ec; border-color: #f3d19e; }
+.summary-card.danger { background: #fef0f0; border-color: #fab6b6; }
+
+.summary-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.summary-label {
+  color: var(--secondary-text-color);
+  font-size: 0.85rem;
+}
+
+.batch-bind-table {
+  border-radius: 10px;
+  overflow: hidden;
 }
 
 @media (max-width: 768px) {

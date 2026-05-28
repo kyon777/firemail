@@ -13,6 +13,7 @@ from database.db import Database
 from utils.email import EmailBatchProcessor
 from utils.import_parser import normalize_outlook_import_line
 from utils.mail_pool_importer import sync_mail_pool_directory, get_mail_pool_dir
+from utils.mail_pool_cache import MailPoolCache
 from ws_server.handler import WebSocketHandler
 import asyncio
 
@@ -66,6 +67,9 @@ logger.info(f"系统启动: 注册功能状态 = {allow_register}")
 
 # 初始化邮件处理器
 email_processor = EmailBatchProcessor(db)
+
+# 总邮箱库版本化缓存：只在版本变化时重新加载总表
+mail_pool_cache = MailPoolCache(db)
 
 # 初始化WebSocket处理器
 ws_handler = WebSocketHandler()
@@ -855,7 +859,11 @@ def bind_mail_pool_email(current_user):
     if not email:
         return jsonify({'error': '邮箱地址不能为空'}), 400
 
-    result = db.bind_mail_pool_email(current_user['id'], email)
+    pool_entry = mail_pool_cache.get(email)
+    if pool_entry:
+        result = db.bind_mail_pool_email(current_user['id'], email, entry=pool_entry)
+    else:
+        result = {'status': 'not_found'}
     status = result.get('status')
 
     if status in ['bound', 'already_bound']:
@@ -884,6 +892,38 @@ def bind_mail_pool_email(current_user):
 
     logger.error(f"绑定总邮箱库邮箱失败: {result}")
     return jsonify({'error': '绑定邮箱失败', 'status': status}), 500
+
+
+
+@app.route('/api/mail-pool/batch-bind', methods=['POST'])
+@token_required
+def batch_bind_mail_pool_emails(current_user):
+    """普通用户批量提交邮箱地址，命中总库后直接绑定到自己的邮箱列表。"""
+    data = request.get_json(silent=True) or {}
+    raw_emails = data.get('emails', '')
+
+    if isinstance(raw_emails, list):
+        emails = [str(item).strip().lower() for item in raw_emails if str(item).strip()]
+    else:
+        emails = [line.strip().lower() for line in str(raw_emails).splitlines() if line.strip()]
+
+    if not emails:
+        return jsonify({'error': '邮箱列表不能为空', 'status': 'invalid_email'}), 400
+
+    if len(emails) > 1000:
+        return jsonify({'error': '单次最多绑定 1000 个邮箱', 'status': 'too_many'}), 400
+
+    pool_entries = mail_pool_cache.get_many(emails)
+
+    result = db.bind_mail_pool_emails(
+        current_user['id'],
+        emails,
+        resolver=lambda email: pool_entries.get(email),
+    )
+    logger.info(
+        f"用户 {current_user['username']} 批量绑定总库邮箱: total={result.get('total')}, summary={result.get('summary')}"
+    )
+    return jsonify(result), 200
 
 
 @app.route('/api/admin/mail-pool/sync', methods=['POST'])

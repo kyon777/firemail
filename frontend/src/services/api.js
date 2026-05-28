@@ -294,6 +294,7 @@ const apiMethods = {
   // Private mail pool APIs
   mailPool: {
     bind: (email) => api.post('/mail-pool/bind', { email }),
+    batchBind: (emails) => api.post('/mail-pool/batch-bind', { emails }),
     sync: () => api.post('/admin/mail-pool/sync'),
     stats: () => api.get('/admin/mail-pool/stats')
   },

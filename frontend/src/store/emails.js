@@ -225,6 +225,22 @@ export const useEmailsStore = defineStore('emails', {
       }
     },
 
+    async batchBindPoolEmails(emails) {
+      this.loading = true;
+      this.error = null;
+
+      try {
+        const response = await api.mailPool.batchBind(emails);
+        await this.fetchEmails();
+        return response.data;
+      } catch (error) {
+        this.error = error.response?.data?.error || '批量绑定邮箱失败';
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
     async fetchEmails() {
       this.loading = true;
       this.error = null;

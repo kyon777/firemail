@@ -154,6 +154,7 @@ class Database:
 
             # 检查并添加新字段
             self._ensure_mail_pool_table()
+            self._ensure_mail_pool_meta_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password_hash', 'TEXT NOT NULL')
 
@@ -199,6 +200,7 @@ class Database:
             ''')
 
             self._ensure_mail_pool_table()
+            self._ensure_mail_pool_meta_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password', 'TEXT')
             self._check_and_add_column('users', 'password_hash', 'TEXT')
@@ -248,6 +250,42 @@ class Database:
         ''')
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_mail_pool_status ON mail_pool(status)')
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_mail_pool_assigned_user ON mail_pool(assigned_user_id)')
+
+    def _ensure_mail_pool_meta_table(self):
+        """创建/补齐总邮箱库元信息表，用于缓存版本号。"""
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS mail_pool_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO mail_pool_meta (key, value) VALUES ('pool_version', '0')"
+        )
+        self.conn.commit()
+
+    def get_mail_pool_version(self) -> int:
+        """读取总邮箱库版本号；缓存层用它判断是否需要重载。"""
+        self._ensure_mail_pool_meta_table()
+        cursor = self.conn.execute("SELECT value FROM mail_pool_meta WHERE key = 'pool_version'")
+        row = cursor.fetchone()
+        try:
+            return int(row['value']) if row else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def _bump_mail_pool_version(self):
+        """总邮箱库内容或绑定状态变化后递增版本号。"""
+        self._ensure_mail_pool_meta_table()
+        self.conn.execute(
+            """
+            UPDATE mail_pool_meta
+            SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE key = 'pool_version'
+            """
+        )
 
     def _check_and_add_column(self, table, column, type_def):
         """检查表中是否存在某列，如果不存在则添加"""
@@ -555,6 +593,7 @@ class Database:
                 """,
                 (email, password, client_id, refresh_token, mail_type or 'outlook', source_file)
             )
+            self._bump_mail_pool_version()
             self.conn.commit()
             logger.info(f"总邮箱库导入成功: {email}, ID: {cursor.lastrowid}")
             return True, 'imported'
@@ -564,6 +603,11 @@ class Database:
         except Exception as e:
             logger.error(f"总邮箱库导入失败: {email}, 错误: {str(e)}")
             return False, str(e)
+
+    def get_mail_pool_entries_for_cache(self):
+        """加载总邮箱库完整记录，仅供后端内存缓存使用。"""
+        cursor = self.conn.execute("SELECT * FROM mail_pool")
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_mail_pool_entry_by_email(self, email):
         """按邮箱地址精确查总库记录。普通用户 API 不暴露此方法结果。"""
@@ -600,14 +644,14 @@ class Database:
             )
         return [dict(row) for row in cursor.fetchall()]
 
-    def bind_mail_pool_email(self, user_id, email):
-        """普通用户按邮箱地址绑定总库邮箱；不会泄露其他总库记录。"""
+    def bind_mail_pool_email(self, user_id, email, entry=None):
+        """普通用户绑定指定邮箱；entry 可由总库缓存提供，避免逐条查库。"""
         email = self._normalize_pool_email(email)
         if not email:
             return {'status': 'invalid_email'}
 
         try:
-            entry = self.get_mail_pool_entry_by_email(email)
+            entry = entry or self.get_mail_pool_entry_by_email(email)
             if not entry:
                 return {'status': 'not_found'}
 
@@ -634,6 +678,7 @@ class Database:
                     """,
                     (user_id, email)
                 )
+                self._bump_mail_pool_version()
                 self.conn.commit()
                 return {'status': 'already_bound', 'email_id': existing['id'], 'email': email}
 
@@ -667,6 +712,7 @@ class Database:
                 """,
                 (user_id, email)
             )
+            self._bump_mail_pool_version()
             self.conn.commit()
             logger.info(f"用户ID {user_id} 已绑定总库邮箱: {email}, 邮箱ID: {email_id}")
             return {'status': 'bound', 'email_id': email_id, 'email': email}
@@ -682,6 +728,52 @@ class Database:
         except Exception as e:
             logger.error(f"绑定总库邮箱失败: user_id={user_id}, email={email}, 错误: {str(e)}")
             return {'status': 'error', 'error': str(e)}
+
+    def bind_mail_pool_emails(self, user_id, emails, resolver=None):
+        """批量绑定邮箱；resolver 负责从缓存或数据库解析总库记录。"""
+        status_messages = {
+            'bound': '邮箱绑定成功',
+            'already_bound': '邮箱已绑定，无需重复绑定',
+            'not_found': '该邮箱不在可绑定邮箱库中',
+            'assigned_to_other': '该邮箱已被其他用户绑定',
+            'disabled': '该邮箱已被禁用，无法绑定',
+            'invalid_email': '邮箱地址不能为空',
+            'unsupported_type': '该邮箱类型暂不支持绑定',
+            'conflict': '邮箱绑定冲突，请稍后重试',
+            'error': '邮箱绑定失败',
+        }
+        results = []
+        summary = {}
+        resolver = resolver or self.get_mail_pool_entry_by_email
+
+        for index, raw_email in enumerate(emails or [], start=1):
+            email = self._normalize_pool_email(raw_email)
+            if not email:
+                result = {'status': 'invalid_email'}
+            else:
+                entry = resolver(email)
+                if entry:
+                    result = self.bind_mail_pool_email(user_id, email, entry=entry)
+                else:
+                    result = {'status': 'not_found'}
+
+            status = result.get('status', 'error')
+            summary[status] = summary.get(status, 0) + 1
+            safe_item = {
+                'line': index,
+                'email': email,
+                'status': status,
+                'message': status_messages.get(status, status_messages['error'])
+            }
+            if result.get('email_id'):
+                safe_item['email_id'] = result['email_id']
+            results.append(safe_item)
+
+        return {
+            'total': len(emails or []),
+            'summary': summary,
+            'results': results
+        }
 
     def get_email_by_id(self, email_id, user_id=None):
         """根据ID获取邮箱账号，可以验证所有者"""
