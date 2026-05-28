@@ -31,28 +31,11 @@ class RealTimeChecker:
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
     
     def start(self, check_interval=60):
-        """启动实时邮件检查
-        
-        Args:
-            check_interval: 检查间隔，单位为秒
-        
-        Returns:
-            启动是否成功
-        """
-        if self.running:
-            logger.warning("实时邮件检查已在运行")
-            return False
-        
-        self.check_interval = max(check_interval, 30)  # 最小检查间隔为30秒
-        self.running = True
-        self.thread = threading.Thread(
-            target=self._check_loop,
-            daemon=True
-        )
-        self.thread.start()
-        logger.info(f"实时邮件检查已启动，检查间隔: {self.check_interval}秒")
-        return True
-    
+        """实时自动收码已关闭；保留方法仅兼容旧调用。"""
+        logger.info("实时自动收码已关闭，忽略启动请求")
+        self.running = False
+        return False
+
     def stop(self):
         """停止实时邮件检查
         

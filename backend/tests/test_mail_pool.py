@@ -93,6 +93,44 @@ class MailPoolDatabaseTestCase(unittest.TestCase):
         self.assertEqual(pool_entry['status'], 'assigned')
         self.assertEqual(pool_entry['assigned_user_id'], user_id)
 
+
+    def test_bind_mail_pool_email_disables_realtime_check_by_default(self):
+        self.db.create_user('customer', 'zz123456', is_admin=False)
+        user_id = self.db.conn.execute("SELECT id FROM users WHERE username = 'customer'").fetchone()[0]
+        self.db.add_mail_pool_entry(
+            'pool-realtime@outlook.com',
+            'pw1',
+            '9e5f94bc-e8a4-4e73-b8be-63364c29d753',
+            'M.C111_SN1.token-value$$'
+        )
+
+        result = self.db.bind_mail_pool_email(user_id, 'pool-realtime@outlook.com')
+
+        email_row = self.db.conn.execute(
+            "SELECT enable_realtime_check FROM emails WHERE id = ?",
+            (result['email_id'],)
+        ).fetchone()
+        self.assertEqual(email_row['enable_realtime_check'], 0)
+
+    def test_add_email_disables_realtime_check_by_default(self):
+        self.db.create_user('customer2', 'zz123456', is_admin=False)
+        user_id = self.db.conn.execute("SELECT id FROM users WHERE username = 'customer2'").fetchone()[0]
+
+        email_id = self.db.add_email(
+            user_id,
+            'manual-only@outlook.com',
+            'pw1',
+            '9e5f94bc-e8a4-4e73-b8be-63364c29d753',
+            'M.C111_SN1.token-value$$',
+            'outlook'
+        )
+
+        email_row = self.db.conn.execute(
+            "SELECT enable_realtime_check FROM emails WHERE id = ?",
+            (email_id,)
+        ).fetchone()
+        self.assertEqual(email_row['enable_realtime_check'], 0)
+
     def test_bind_mail_pool_email_rejects_email_assigned_to_another_user(self):
         self.db.create_user('first', 'zz123456', is_admin=False)
         self.db.create_user('second', 'zz123456', is_admin=False)

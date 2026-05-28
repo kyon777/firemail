@@ -478,17 +478,17 @@ class Database:
             else:
                 logger.info(f"尝试添加邮箱: {email} (用户ID: {user_id}, 类型: {mail_type})")
 
-            # 根据邮箱类型处理SQL，默认启用实时检查
+            # 根据邮箱类型处理SQL，默认关闭实时检查
             if mail_type == 'outlook':
                 cursor = self.conn.execute(
-                    "INSERT INTO emails (user_id, email, password, client_id, refresh_token, mail_type, enable_realtime_check) VALUES (?, ?, ?, ?, ?, ?, 1)",
+                    "INSERT INTO emails (user_id, email, password, client_id, refresh_token, mail_type, enable_realtime_check) VALUES (?, ?, ?, ?, ?, ?, 0)",
                     (user_id, email, password, client_id, refresh_token, mail_type)
                 )
             elif mail_type in ['imap', 'gmail', 'qq']:
                 # 将布尔值转换为整数值 (1=True, 0=False)
                 use_ssl_int = 1 if use_ssl else 0
                 cursor = self.conn.execute(
-                    "INSERT INTO emails (user_id, email, password, mail_type, server, port, use_ssl, enable_realtime_check) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                    "INSERT INTO emails (user_id, email, password, mail_type, server, port, use_ssl, enable_realtime_check) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
                     (user_id, email, password, mail_type, server, port, use_ssl_int)
                 )
             else:
@@ -497,7 +497,7 @@ class Database:
 
             self.conn.commit()
             email_id = cursor.lastrowid
-            logger.info(f"邮箱添加成功: {email}, ID: {email_id}, 类型: {mail_type}, 已启用实时检查")
+            logger.info(f"邮箱添加成功: {email}, ID: {email_id}, 类型: {mail_type}, 已关闭实时检查")
             return email_id
         except sqlite3.IntegrityError as e:
             # 邮箱已存在
@@ -646,7 +646,7 @@ class Database:
                 INSERT INTO emails (
                     user_id, email, password, client_id, refresh_token, mail_type,
                     enable_realtime_check, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     user_id,

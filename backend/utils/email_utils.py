@@ -181,10 +181,6 @@ def broadcast_to_user_sync(user_id, message):
         logger.error(f"向用户 {user_id} 发送消息失败: {str(e)}")
 
 def start_realtime_check():
-    """启动实时邮件检查"""
-    while True:
-        try:
-            check_realtime_emails()
-        except Exception as e:
-            logger.error(f"实时邮件检查出错: {str(e)}")
-        time.sleep(10)  # 每10秒检查一次 
+    """实时自动收码已关闭；保留函数仅兼容旧调用。"""
+    logger.info("实时自动收码已关闭，忽略启动请求")
+    return False

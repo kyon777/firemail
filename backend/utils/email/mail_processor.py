@@ -477,8 +477,9 @@ class EmailBatchProcessor:
                 logger.error(f"释放邮箱处理资源失败: {str(e)}")
 
     def start_real_time_check(self, check_interval=60):
-        """启动实时邮件检查"""
-        return self.real_time_checker.start(check_interval)
+        """实时自动收码已关闭；保留方法仅兼容旧调用。"""
+        logger.info("实时自动收码已关闭，忽略启动请求")
+        return False
 
     def stop_real_time_check(self):
         """停止实时邮件检查"""

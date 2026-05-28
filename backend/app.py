@@ -1074,35 +1074,18 @@ def update_email(current_user, email_id):
 
 @app.route('/api/email/start_real_time_check', methods=['POST'])
 @token_required
-def start_real_time_check():
-    """启动实时邮件检查"""
-    try:
-        check_interval = request.json.get('check_interval', 60)
-        if check_interval < 30:  # 最小检查间隔为30秒
-            check_interval = 30
-
-        success = email_processor.start_real_time_check(check_interval)
-        if success:
-            return jsonify({
-                'success': True,
-                'message': f'实时邮件检查已启动，检查间隔: {check_interval}秒'
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': '实时邮件检查已在运行中'
-            })
-    except Exception as e:
-        logger.error(f"启动实时邮件检查失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'启动实时邮件检查失败: {str(e)}'
-        })
+def start_real_time_check(current_user):
+    """拒绝启动实时自动收码；系统仅支持用户手动点击检查邮件。"""
+    logger.info(f"用户 {current_user['username']} 尝试启动实时自动收码，已拒绝")
+    return jsonify({
+        'success': False,
+        'message': '实时自动收码已关闭，请在前端点击检查邮件手动收码'
+    }), 410
 
 @app.route('/api/email/stop_real_time_check', methods=['POST'])
 @token_required
-def stop_real_time_check():
-    """停止实时邮件检查"""
+def stop_real_time_check(current_user):
+    """兼容旧前端：允许停止实时检查，但不会启动任何自动收码。"""
     try:
         success = email_processor.stop_real_time_check()
         if success:
@@ -1124,34 +1107,20 @@ def stop_real_time_check():
 
 @app.route('/api/email/add_to_real_time_queue', methods=['POST'])
 @token_required
-def add_to_real_time_queue():
-    """将邮箱添加到实时检查队列"""
-    try:
-        email_id = request.json.get('email_id')
-        if not email_id:
-            return jsonify({
-                'success': False,
-                'message': '缺少邮箱ID'
-            })
-
-        email_processor.add_to_real_time_queue(email_id)
-        return jsonify({
-            'success': True,
-            'message': f'邮箱ID: {email_id} 已添加到实时检查队列'
-        })
-    except Exception as e:
-        logger.error(f"添加邮箱到实时检查队列失败: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'添加邮箱到实时检查队列失败: {str(e)}'
-        })
+def add_to_real_time_queue(current_user):
+    """拒绝加入实时检查队列，避免大量邮箱自动触发 429 限流。"""
+    logger.info(f"用户 {current_user['username']} 尝试加入实时检查队列，已拒绝")
+    return jsonify({
+        'success': False,
+        'message': '实时自动收码已关闭，请在前端点击检查邮件手动收码'
+    }), 410
 
 @app.route('/api/emails/<int:email_id>/realtime', methods=['POST'])
 @token_required
 def toggle_email_realtime_check(current_user, email_id):
-    """开启/关闭指定邮箱的实时检查"""
+    """兼容旧实时检查开关：禁止开启，只允许关闭历史开关。"""
     try:
-        data = request.json
+        data = request.json or {}
         enable = data.get('enable', False)
 
         # 获取当前邮箱信息
@@ -1159,21 +1128,27 @@ def toggle_email_realtime_check(current_user, email_id):
         if not email_info:
             return jsonify({'error': '邮箱不存在或您没有权限'}), 404
 
-        # 更新实时检查状态
-        success = db.set_email_realtime_check(email_id, enable)
+        if enable:
+            logger.info(f"用户 {current_user['username']} 尝试开启邮箱 {email_info['email']} 的实时自动收码，已拒绝")
+            return jsonify({
+                'success': False,
+                'message': '实时自动收码已关闭，请使用前端检查邮件按钮手动收码'
+            }), 410
+
+        # 兼容旧数据：允许用户把历史实时检查开关关闭。
+        success = db.set_email_realtime_check(email_id, False)
         if not success:
             return jsonify({'error': '更新实时检查状态失败'}), 500
 
-        action = "开启" if enable else "关闭"
-        logger.info(f"用户 {current_user['username']} {action}了邮箱 {email_info['email']} 的实时检查")
+        logger.info(f"用户 {current_user['username']} 关闭了邮箱 {email_info['email']} 的实时检查")
 
         return jsonify({
             'success': True,
-            'message': f'已{action}邮箱的实时检查',
+            'message': '已关闭邮箱的实时检查',
             'data': {
                 'email_id': email_id,
                 'email': email_info['email'],
-                'enable_realtime_check': enable
+                'enable_realtime_check': False
             }
         })
     except Exception as e:
@@ -1249,9 +1224,8 @@ if __name__ == '__main__':
         # 启动总邮箱库自动同步
         start_mail_pool_auto_sync()
 
-        # 启动实时邮件检查
-        email_processor.start_real_time_check(check_interval=60)
-        logger.info("实时邮件检查已启动")
+        # 不启动实时自动收码，避免邮箱数量过多时触发 429 限流
+        logger.info("实时自动收码未启动，仅支持前端手动点击检查邮件")
 
         # 启动Flask应用
         logger.info(f"花火邮箱助手启动于 http://{args.host}:{args.port}")
