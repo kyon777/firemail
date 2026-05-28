@@ -32,7 +32,7 @@
             placeholder="请输入分配给你的邮箱地址" 
             required
           />
-          <small class="form-text text-muted">必须填写总邮箱库中已分配的邮箱，仅用于注册资格验证</small>
+          <small class="form-text text-muted">你购买的卡密随便一个邮箱，仅用于注册资格验证</small>
         </div>
         
         <div class="form-group">
