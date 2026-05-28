@@ -78,6 +78,7 @@ ws_handler.set_dependencies(db, email_processor)
 REGISTER_EMAIL_VERIFY_ACTION = 'register_email_verify'
 EMAIL_CHECK_ACTION = 'email_check'
 EMAIL_CHECK_DAILY_LIMIT = 50
+CUSTOMER_VISIBLE_SENDER = 'openai.com'
 
 
 def get_client_ip():
@@ -745,7 +746,10 @@ def get_mail_records(current_user, email_id):
     if not email_info:
         return jsonify({'error': f'邮箱 ID {email_id} 不存在或您没有权限'}), 404
 
-    mail_records = db.get_mail_records(email_id)
+    if current_user['is_admin']:
+        mail_records = db.get_mail_records(email_id)
+    else:
+        mail_records = db.get_mail_records(email_id, sender_filter=CUSTOMER_VISIBLE_SENDER)
     return jsonify([dict(record) for record in mail_records])
 
 @app.route('/api/mail_records/<int:mail_id>/attachments', methods=['GET'])

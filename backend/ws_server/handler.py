@@ -13,6 +13,7 @@ logger = logging.getLogger('websocket')
 
 EMAIL_CHECK_ACTION = 'email_check'
 EMAIL_CHECK_DAILY_LIMIT = 50
+CUSTOMER_VISIBLE_SENDER = 'openai.com'
 
 class WebSocketHandler:
     def __init__(self):
@@ -370,7 +371,10 @@ class WebSocketHandler:
                 return
             
             # 获取邮件记录
-            mail_records = self.db.get_mail_records(email_id)
+            if is_admin:
+                mail_records = self.db.get_mail_records(email_id)
+            else:
+                mail_records = self.db.get_mail_records(email_id, sender_filter=CUSTOMER_VISIBLE_SENDER)
             
             # 发送响应
             await websocket.send(json.dumps({

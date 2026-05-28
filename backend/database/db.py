@@ -1160,21 +1160,26 @@ class Database:
             logger.error(f"添加邮件记录失败: {str(e)}")
             return False, None
 
-    def get_mail_records(self, email_id, user_id=None):
-        """获取指定邮箱的所有邮件记录，可以验证所有者"""
-        logger.debug(f"获取邮箱邮件记录, ID: {email_id}")
+    def get_mail_records(self, email_id, user_id=None, sender_filter=None):
+        """Get mail records; optionally verify owner and filter by sender keyword."""
+        logger.debug(f"Get mail records, email ID: {email_id}")
 
-        # 如果指定了用户ID，先验证邮箱所有权
+        # Verify ownership when user_id is specified.
         if user_id:
             email = self.get_email_by_id(email_id, user_id)
             if not email:
-                logger.warning(f"用户ID {user_id} 没有权限访问邮箱ID {email_id}")
+                logger.warning(f"User ID {user_id} cannot access email ID {email_id}")
                 return []
 
-        cursor = self.conn.execute(
-            "SELECT * FROM mail_records WHERE email_id = ? ORDER BY received_time DESC",
-            (email_id,)
-        )
+        sql = "SELECT * FROM mail_records WHERE email_id = ?"
+        params = [email_id]
+        sender_filter = (sender_filter or '').strip().lower()
+        if sender_filter:
+            sql += " AND LOWER(COALESCE(sender, '')) LIKE ?"
+            params.append(f"%{sender_filter}%")
+        sql += " ORDER BY received_time DESC"
+
+        cursor = self.conn.execute(sql, params)
 
         records = []
         for record in cursor.fetchall():
