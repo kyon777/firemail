@@ -693,6 +693,24 @@ class Database:
         cursor = self.conn.execute("SELECT id, username, is_admin, created_at FROM users ORDER BY created_at DESC")
         return cursor.fetchall()
 
+    def get_all_users_with_emails(self):
+        """获取用户列表及其邮箱摘要；不返回密码、令牌等敏感字段。"""
+        users = [dict(user) for user in self.get_all_users()]
+        for user in users:
+            cursor = self.conn.execute(
+                """
+                SELECT id, email, mail_type, created_at, last_check_time
+                FROM emails
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                """,
+                (user['id'],)
+            )
+            emails = [dict(row) for row in cursor.fetchall()]
+            user['emails'] = emails
+            user['email_count'] = len(emails)
+        return users
+
     # 邮箱相关方法
     def add_email(self, user_id, email, password, client_id=None, refresh_token=None, mail_type='outlook', server=None, port=None, use_ssl=True):
         """添加新的邮箱账号"""

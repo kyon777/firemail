@@ -370,8 +370,8 @@ def change_password(current_user):
 @admin_required
 def get_all_users(current_user):
     """获取所有用户 (仅管理员)"""
-    users = db.get_all_users()
-    return jsonify([dict(user) for user in users])
+    users = db.get_all_users_with_emails()
+    return jsonify(users)
 
 @app.route('/api/users', methods=['POST'])
 @token_required

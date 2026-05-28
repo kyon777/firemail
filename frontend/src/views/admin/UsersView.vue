@@ -34,18 +34,28 @@
             <th>ID</th>
             <th>用户名</th>
             <th>类型</th>
+            <th>邮箱数量</th>
             <th>创建时间</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="users.length === 0">
-            <td colspan="5" class="text-center">暂无用户数据</td>
+            <td colspan="6" class="text-center">暂无用户数据</td>
           </tr>
           <tr v-for="user in users" :key="user.id">
             <td>{{ user.id }}</td>
             <td>{{ user.username }}</td>
             <td>{{ user.is_admin ? '管理员' : '普通用户' }}</td>
+            <td>
+              <button
+                class="btn btn-sm btn-info"
+                @click="openUserEmailsModal(user)"
+                :disabled="(user.email_count || 0) === 0"
+              >
+                查看邮箱 ({{ user.email_count || 0 }})
+              </button>
+            </td>
             <td>{{ formatDate(user.created_at) }}</td>
             <td class="actions">
               <button
@@ -66,6 +76,46 @@
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- 用户邮箱列表模态框 -->
+    <div v-if="showUserEmailsModal" class="modal-overlay">
+      <div class="modal-container modal-lg">
+        <div class="modal-header">
+          <h2>用户邮箱列表 - {{ selectedUser?.username }}</h2>
+          <button class="modal-close" @click="closeUserEmailsModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted">仅展示邮箱摘要，不展示密码、Refresh Token、Client ID。</p>
+
+          <table class="email-summary-table" v-if="selectedUserEmails.length > 0">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>邮箱</th>
+                <th>类型</th>
+                <th>导入/绑定时间</th>
+                <th>最后检查时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="email in selectedUserEmails" :key="email.id">
+                <td>{{ email.id }}</td>
+                <td>{{ email.email }}</td>
+                <td>{{ email.mail_type || '未知' }}</td>
+                <td>{{ formatDate(email.created_at) }}</td>
+                <td>{{ formatDate(email.last_check_time) }}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <p v-else class="text-center">该用户暂无邮箱</p>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-secondary" @click="closeUserEmailsModal">关闭</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 添加用户模态框 -->
@@ -239,6 +289,8 @@ export default {
       // 重置密码
       showResetPasswordModal: false,
       selectedUser: null,
+      showUserEmailsModal: false,
+      selectedUserEmails: [],
       resetPasswordData: {
         newPassword: '',
         confirmPassword: ''
@@ -324,6 +376,18 @@ export default {
         this.registrationEnabled = !value; // 恢复原状态
         this.showMessage('error', `${value ? '开启' : '关闭'}注册功能失败: ${error.message || '未知错误'}`);
       }
+    },
+
+    openUserEmailsModal(user) {
+      this.selectedUser = user;
+      this.selectedUserEmails = Array.isArray(user.emails) ? user.emails : [];
+      this.showUserEmailsModal = true;
+    },
+
+    closeUserEmailsModal() {
+      this.showUserEmailsModal = false;
+      this.selectedUser = null;
+      this.selectedUserEmails = [];
     },
 
     // 添加用户
@@ -594,6 +658,15 @@ export default {
   background-color: #e0a800;
 }
 
+.btn-info {
+  background-color: #17a2b8;
+  color: white;
+}
+
+.btn-info:hover {
+  background-color: #138496;
+}
+
 .btn-danger {
   background-color: #dc3545;
   color: white;
@@ -670,6 +743,29 @@ export default {
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.modal-lg {
+  max-width: 900px;
+}
+
+.email-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.email-summary-table th,
+.email-summary-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+  word-break: break-all;
+}
+
+.email-summary-table th {
+  background-color: #f8f8f8;
+  font-weight: 600;
 }
 
 .modal-header {
