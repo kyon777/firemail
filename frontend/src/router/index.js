@@ -72,15 +72,8 @@ const router = createRouter({
       path: '/import',
       name: 'import',
       component: () => import('@/views/ImportView.vue'),
-      meta: { requiresAuth: true },
-      beforeEnter: requireAuth
-    },
-    {
-      path: '/search',
-      name: 'search',
-      component: () => import('@/views/SearchView.vue'),
-      meta: { requiresAuth: true },
-      beforeEnter: requireAuth
+      meta: { requiresAdmin: true },
+      beforeEnter: requireAdmin
     },
     {
       path: '/about',
@@ -182,4 +175,4 @@ router.beforeEach((to, from, next) => {
   }
 })
 
-export default router 
+export default router

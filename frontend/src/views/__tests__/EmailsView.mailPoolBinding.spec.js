@@ -113,10 +113,11 @@ describe('EmailsView mail pool binding', () => {
     mockIsAdmin = false
   })
 
-  it('shows bind email entry instead of admin import controls for normal users', () => {
+  it('shows only the batch bind entry instead of single-bind or admin import controls for normal users', () => {
     const wrapper = mountView()
 
-    expect(wrapper.text()).toContain('\u7ed1\u5b9a\u90ae\u7bb1')
+    expect(wrapper.text()).toContain('\u6279\u91cf\u7ed1\u5b9a')
+    expect(wrapper.text()).not.toContain('\u7ed1\u5b9a\u90ae\u7bb1')
     expect(wrapper.text()).not.toContain('\u6279\u91cf\u5bfc\u5165')
   })
 
@@ -136,5 +137,14 @@ describe('EmailsView mail pool binding', () => {
     expect(mockStore.batchBindPoolEmails).toHaveBeenCalledWith('a@outlook.com\nmissing@outlook.com')
     expect(wrapper.vm.batchBindResult.summary.bound).toBe(1)
     expect(wrapper.vm.batchBindResult.summary.not_found).toBe(1)
+  })
+
+  it('submits a single pool email through the batch bind flow', async () => {
+    const wrapper = mountView()
+
+    wrapper.vm.batchBindForm.emails = 'single@outlook.com'
+    await wrapper.vm.handleBatchBindPoolEmails()
+
+    expect(mockStore.batchBindPoolEmails).toHaveBeenCalledWith('single@outlook.com')
   })
 })
