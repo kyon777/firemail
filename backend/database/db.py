@@ -156,7 +156,7 @@ class Database:
             self._ensure_mail_pool_table()
             self._ensure_mail_pool_meta_table()
             self._ensure_ip_rate_limit_table()
-            self._ensure_email_check_limit_table()
+            self._ensure_user_email_check_limit_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password_hash', 'TEXT NOT NULL')
 
@@ -204,7 +204,7 @@ class Database:
             self._ensure_mail_pool_table()
             self._ensure_mail_pool_meta_table()
             self._ensure_ip_rate_limit_table()
-            self._ensure_email_check_limit_table()
+            self._ensure_user_email_check_limit_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password', 'TEXT')
             self._check_and_add_column('users', 'password_hash', 'TEXT')
@@ -286,27 +286,27 @@ class Database:
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_ip_rate_limits_blocked_until ON ip_rate_limits(blocked_until)')
         self.conn.commit()
 
-    def _ensure_email_check_limit_table(self):
+    def _ensure_user_email_check_limit_table(self):
         """创建/补齐邮箱检查限流表。
 
         该表专门用于“前端点击检查邮箱/收码”的限流：
-        - 同一 IP 每 24 小时最多检查 50 个不同邮箱；
-        - 同一 IP + 同一邮箱 60 秒内最多检查 3 次。
+        - 同一用户每 24 小时最多检查 50 个不同邮箱；
+        - 同一用户 + 同一邮箱 60 秒内最多检查 3 次。
         """
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS ip_email_check_limits (
-                ip TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS user_email_check_limits (
+                user_id INTEGER NOT NULL,
                 email_id INTEGER NOT NULL,
                 daily_window_start TEXT NOT NULL,
                 minute_window_start TEXT NOT NULL,
                 minute_count INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (ip, email_id)
+                PRIMARY KEY (user_id, email_id)
             )
         """)
         self.conn.execute(
-            'CREATE INDEX IF NOT EXISTS idx_ip_email_check_limits_daily '
-            'ON ip_email_check_limits(ip, daily_window_start)'
+            'CREATE INDEX IF NOT EXISTS idx_user_email_check_limits_daily '
+            'ON user_email_check_limits(user_id, daily_window_start)'
         )
         self.conn.commit()
 
@@ -480,16 +480,16 @@ class Database:
             'reset_at': reset_at,
         }
 
-    def consume_email_check_limits(self, ip, email_ids, daily_limit=50, minute_limit=3, now=None):
+    def consume_user_email_check_limits(self, user_id, email_ids, daily_limit=50, minute_limit=3, now=None):
         """消耗邮箱检查额度。
 
-        每日额度按同一 IP 检查过的“不同 email_id”计算；重复检查同一个邮箱不重复扣
-        每日额度。同时对同一 IP + 同一 email_id 做 60 秒窗口限流，窗口内第 4 次
+        每日额度按同一用户检查过的“不同 email_id”计算；重复检查同一个邮箱不重复扣
+        每日额度。同时对同一用户 + 同一 email_id 做 60 秒窗口限流，窗口内第 4 次
         返回 429 所需的状态。
         """
-        self._ensure_email_check_limit_table()
+        self._ensure_user_email_check_limit_table()
         now = now or datetime.utcnow()
-        ip = (ip or 'unknown').strip() or 'unknown'
+        user_id = int(user_id)
         daily_limit = max(1, int(daily_limit or 50))
         minute_limit = max(1, int(minute_limit or 3))
 
@@ -520,10 +520,10 @@ class Database:
         cursor = self.conn.execute(
             """
             SELECT email_id, daily_window_start, minute_window_start, minute_count
-            FROM ip_email_check_limits
-            WHERE ip = ?
+            FROM user_email_check_limits
+            WHERE user_id = ?
             """,
-            (ip,)
+            (user_id,)
         )
         rows_by_email_id = {int(row['email_id']): dict(row) for row in cursor.fetchall()}
 
@@ -586,17 +586,17 @@ class Database:
             minute_start, minute_count = minute_updates[email_id]
             self.conn.execute(
                 """
-                INSERT INTO ip_email_check_limits (
-                    ip, email_id, daily_window_start, minute_window_start, minute_count, updated_at
+                INSERT INTO user_email_check_limits (
+                    user_id, email_id, daily_window_start, minute_window_start, minute_count, updated_at
                 ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(ip, email_id) DO UPDATE SET
+                ON CONFLICT(user_id, email_id) DO UPDATE SET
                     daily_window_start = excluded.daily_window_start,
                     minute_window_start = excluded.minute_window_start,
                     minute_count = excluded.minute_count,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
-                    ip,
+                    user_id,
                     email_id,
                     self._format_limit_time(daily_start),
                     self._format_limit_time(minute_start),

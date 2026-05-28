@@ -284,9 +284,8 @@ class WebSocketHandler:
                 }))
                 return
 
-            client_ip = self.get_client_ip(websocket)
-            limit_state = self.db.consume_email_check_limits(
-                client_ip,
+            limit_state = self.db.consume_user_email_check_limits(
+                user_id,
                 valid_ids,
                 daily_limit=EMAIL_CHECK_DAILY_LIMIT,
                 minute_limit=EMAIL_CHECK_MINUTE_LIMIT,
@@ -304,7 +303,7 @@ class WebSocketHandler:
                         'reset_at': limit_state.get('reset_at')
                     }))
                     logger.warning(
-                        f"WebSocket邮箱检查被单邮箱分钟限流: IP={client_ip}, "
+                        f"WebSocket邮箱检查被单邮箱分钟限流: 用户ID={user_id}, "
                         f"邮箱ID={limit_state.get('email_id')}, retry_after={limit_state.get('retry_after')}"
                     )
                     return
@@ -318,7 +317,7 @@ class WebSocketHandler:
                     'reset_at': limit_state.get('reset_at')
                 }))
                 logger.warning(
-                    f"WebSocket邮箱检查被限流: IP={client_ip}, 请求数量={len(valid_ids)}, "
+                    f"WebSocket邮箱检查被限流: 用户ID={user_id}, 请求数量={len(valid_ids)}, "
                     f"状态={limit_state.get('status')}, 剩余额度={limit_state.get('remaining')}"
                 )
                 return

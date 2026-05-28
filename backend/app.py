@@ -624,16 +624,15 @@ def check_email(current_user, email_id):
                     'message': '邮箱正在处理中，请稍后再试',
                     'status': 'processing'
                 }), 409
-            client_ip = get_client_ip()
-            limit_state = db.consume_email_check_limits(
-                client_ip,
+            limit_state = db.consume_user_email_check_limits(
+                current_user['id'],
                 [email_id],
                 daily_limit=EMAIL_CHECK_DAILY_LIMIT,
                 minute_limit=EMAIL_CHECK_MINUTE_LIMIT,
             )
             if not limit_state.get('allowed'):
                 logger.warning(
-                    f"邮箱检查被限流: IP={client_ip}, 邮箱ID={email_id}, "
+                    f"邮箱检查被限流: 用户ID={current_user['id']}, 邮箱ID={email_id}, "
                     f"状态={limit_state.get('status')}, 剩余额度={limit_state.get('remaining')}"
                 )
                 return email_check_rate_limited_response(limit_state)
@@ -724,16 +723,15 @@ def batch_check_emails(current_user):
             'processing_ids': processing_ids
         }), 409
 
-    client_ip = get_client_ip()
-    limit_state = db.consume_email_check_limits(
-        client_ip,
+    limit_state = db.consume_user_email_check_limits(
+        current_user['id'],
         valid_ids,
         daily_limit=EMAIL_CHECK_DAILY_LIMIT,
         minute_limit=EMAIL_CHECK_MINUTE_LIMIT,
     )
     if not limit_state.get('allowed'):
         logger.warning(
-            f"批量邮箱检查被限流: IP={client_ip}, 请求数量={len(valid_ids)}, "
+            f"批量邮箱检查被限流: 用户ID={current_user['id']}, 请求数量={len(valid_ids)}, "
             f"状态={limit_state.get('status')}, 剩余额度={limit_state.get('remaining')}"
         )
         return email_check_rate_limited_response(limit_state)
