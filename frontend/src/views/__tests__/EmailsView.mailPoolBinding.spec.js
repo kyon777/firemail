@@ -20,20 +20,22 @@ const mockStore = {
   checkEmails: vi.fn(),
   fetchMailRecords: vi.fn(),
   addEmail: vi.fn(),
+  bindPoolEmail: vi.fn().mockResolvedValue({ email_id: 7 }),
   importEmails: vi.fn(),
   getEmailPassword: vi.fn(),
   updateEmail: vi.fn()
 }
 
+let mockIsAdmin = false
+
 vi.mock('@/store/emails', () => ({
   useEmailsStore: () => mockStore
 }))
 
-
 vi.mock('vuex', () => ({
   useStore: () => ({
     getters: {
-      'auth/isAdmin': true
+      'auth/isAdmin': mockIsAdmin
     }
   })
 }))
@@ -67,42 +69,46 @@ vi.mock('@/components/EmailContentViewer.vue', () => ({
   }
 }))
 
-describe('EmailsView import entry', () => {
+const mountView = () => mount(EmailsView, {
+  global: {
+    directives: {
+      loading: {}
+    },
+    stubs: {
+      transition: false,
+      teleport: true,
+      'el-card': { template: '<div><slot name="header" /><slot /></div>' },
+      'el-button': { template: '<button @click="$emit(\'click\')"><slot /></button>' },
+      'el-table': true,
+      'el-table-column': true,
+      'el-tag': true,
+      'el-dialog': { template: '<div><slot /><slot name="footer" /></div>' },
+      'el-tabs': { template: '<div><slot /></div>' },
+      'el-tab-pane': { template: '<div><slot /></div>' },
+      'el-form': { template: '<form><slot /></form>', methods: { validate: () => Promise.resolve() } },
+      'el-form-item': { template: '<div><slot /></div>' },
+      'el-select': true,
+      'el-option': true,
+      'el-input': true,
+      'el-input-number': true,
+      'el-switch': true,
+      'el-icon': true,
+      'el-tooltip': true,
+      'el-progress': true
+    }
+  }
+})
+
+describe('EmailsView mail pool binding', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockIsAdmin = false
   })
 
-  it('shows a visible batch import action in the header', () => {
-    const wrapper = mount(EmailsView, {
-      global: {
-        directives: {
-          loading: {}
-        },
-        stubs: {
-          transition: false,
-          teleport: true,
-          'el-card': { template: '<div><slot name="header" /><slot /></div>' },
-          'el-button': { template: '<button><slot /></button>' },
-          'el-table': true,
-          'el-table-column': true,
-          'el-tag': true,
-          'el-dialog': true,
-          'el-tabs': true,
-          'el-tab-pane': true,
-          'el-form': true,
-          'el-form-item': true,
-          'el-select': true,
-          'el-option': true,
-          'el-input': true,
-          'el-input-number': true,
-          'el-switch': true,
-          'el-icon': true,
-          'el-tooltip': true,
-          'el-progress': true
-        }
-      }
-    })
+  it('shows bind email entry instead of admin import controls for normal users', () => {
+    const wrapper = mountView()
 
-    expect(wrapper.text()).toContain('批量导入')
+    expect(wrapper.text()).toContain('绑定邮箱')
+    expect(wrapper.text()).not.toContain('批量导入')
   })
 })

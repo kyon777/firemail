@@ -291,6 +291,13 @@ const apiMethods = {
   },
 
   // 工具方法
+  // Private mail pool APIs
+  mailPool: {
+    bind: (email) => api.post('/mail-pool/bind', { email }),
+    sync: () => api.post('/admin/mail-pool/sync'),
+    stats: () => api.get('/admin/mail-pool/stats')
+  },
+
   setAuthHeader,
   removeAuthHeader
 }

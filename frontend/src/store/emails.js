@@ -208,6 +208,23 @@ export const useEmailsStore = defineStore('emails', {
       }
     },
 
+    // ?????????????????????????????
+    async bindPoolEmail(email) {
+      this.loading = true;
+      this.error = null;
+
+      try {
+        const response = await api.mailPool.bind(email);
+        await this.fetchEmails();
+        return response.data;
+      } catch (error) {
+        this.error = error.response?.data?.error || '??????';
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
     async fetchEmails() {
       this.loading = true;
       this.error = null;

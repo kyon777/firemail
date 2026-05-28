@@ -9,11 +9,11 @@
               <el-button type="primary" @click="refreshEmails" :icon="Refresh" class="hover-scale">
                 刷新列表
               </el-button>
-              <el-button type="warning" @click="goToImportPage" :icon="Upload" class="hover-scale">
+              <el-button v-if="isAdmin" type="warning" @click="goToImportPage" :icon="Upload" class="hover-scale">
                 批量导入
               </el-button>
               <el-button type="success" @click="showAddEmailDialog" :icon="Plus" class="hover-scale">
-                添加邮箱
+                {{ isAdmin ? '添加邮箱' : '绑定邮箱' }}
               </el-button>
             </div>
           </div>
@@ -168,13 +168,28 @@
       <!-- 添加邮箱对话框 -->
       <el-dialog
         v-model="addEmailDialogVisible"
-        title="添加邮箱"
+        :title="isAdmin ? '添加邮箱' : '绑定邮箱'"
         width="600px"
         :close-on-click-modal="false"
         class="add-email-dialog"
         destroy-on-close
       >
-        <el-tabs v-model="addEmailActiveTab">
+        <template v-if="!isAdmin">
+          <p class="import-help">请输入分配给你的邮箱地址，系统会从总邮箱库中匹配并绑定到你的账号。</p>
+          <el-form
+            ref="addEmailFormRef"
+            :model="addEmailForm"
+            :rules="addEmailRules"
+            label-width="120px"
+            class="add-email-form"
+          >
+            <el-form-item label="邮箱地址" prop="email">
+              <el-input v-model="addEmailForm.email" placeholder="请输入邮箱地址" />
+            </el-form-item>
+          </el-form>
+        </template>
+
+        <el-tabs v-else v-model="addEmailActiveTab">
           <el-tab-pane label="单个添加" name="single">
             <el-form
               ref="addEmailFormRef"
@@ -264,7 +279,7 @@
           <span class="dialog-footer">
             <el-button @click="addEmailDialogVisible = false">取消</el-button>
             <el-button type="primary" @click="handleAddOrImport" :loading="addingEmail || importing">
-              确定
+              {{ isAdmin ? '确定' : '绑定' }}
             </el-button>
           </span>
         </template>
@@ -495,6 +510,7 @@
 <script setup>
 import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { useStore } from 'vuex'
 import { useEmailsStore } from '@/store/emails'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import {
@@ -520,6 +536,7 @@ import { buildMailFolderFilters, filterMailRecordsByFolder, getMailFolderCategor
 
 const emailsStore = useEmailsStore()
 const router = useRouter()
+const authStore = useStore()
 
 // 状态
 const loadingMails = ref(false)
@@ -648,6 +665,7 @@ const mailRecords = computed(() => emailsStore.currentMailRecords)
 const hasSelectedEmails = computed(() => emailsStore.hasSelectedEmails)
 const mailFolderFilters = computed(() => buildMailFolderFilters(mailRecords.value))
 const filteredMailRecords = computed(() => filterMailRecordsByFolder(mailRecords.value, selectedMailFolderFilter.value))
+const isAdmin = computed(() => Boolean(authStore?.getters?.['auth/isAdmin']))
 
 // 方法
 const refreshEmails = async () => {
@@ -828,10 +846,45 @@ const goToImportPage = () => {
 }
 
 const handleAddOrImport = async () => {
+  if (!isAdmin.value) {
+    await handleBindPoolEmail()
+    return
+  }
+
   if (addEmailActiveTab.value === 'single') {
     await handleAddEmail()
   } else {
     await handleImport()
+  }
+}
+
+const handleBindPoolEmail = async () => {
+  if (!addEmailFormRef.value) return
+
+  try {
+    await addEmailFormRef.value.validate()
+
+    addingEmail.value = true
+    const loading = ElLoading.service({
+      lock: true,
+      text: '正在绑定邮箱...',
+      background: 'rgba(0, 0, 0, 0.7)'
+    })
+
+    try {
+      await emailsStore.bindPoolEmail(addEmailForm.value.email)
+      addEmailDialogVisible.value = false
+      ElMessage.success('绑定邮箱成功')
+      await refreshEmails()
+    } finally {
+      loading.close()
+    }
+  } catch (error) {
+    console.error('绑定邮箱失败:', error)
+    const message = error.response?.data?.error || error.message || '未知错误'
+    ElMessage.error('绑定邮箱失败: ' + message)
+  } finally {
+    addingEmail.value = false
   }
 }
 

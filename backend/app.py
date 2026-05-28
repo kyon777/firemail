@@ -4,6 +4,7 @@ import logging
 import threading
 import argparse
 import datetime
+import time
 import jwt
 from functools import wraps
 from flask import Flask, send_from_directory, jsonify, request, Response, make_response
@@ -11,6 +12,7 @@ from flask_cors import CORS
 from database.db import Database
 from utils.email import EmailBatchProcessor
 from utils.import_parser import normalize_outlook_import_line
+from utils.mail_pool_importer import sync_mail_pool_directory, get_mail_pool_dir
 from ws_server.handler import WebSocketHandler
 import asyncio
 
@@ -842,6 +844,66 @@ def import_emails(current_user):
     })
 
 # 管理员配置 API
+
+@app.route('/api/mail-pool/bind', methods=['POST'])
+@token_required
+def bind_mail_pool_email(current_user):
+    """普通用户按邮箱地址绑定总邮箱库里的邮箱。"""
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+
+    if not email:
+        return jsonify({'error': '邮箱地址不能为空'}), 400
+
+    result = db.bind_mail_pool_email(current_user['id'], email)
+    status = result.get('status')
+
+    if status in ['bound', 'already_bound']:
+        message = '邮箱绑定成功' if status == 'bound' else '邮箱已绑定，无需重复绑定'
+        return jsonify({
+            'message': message,
+            'status': status,
+            'email': result.get('email', email),
+            'email_id': result.get('email_id')
+        }), 200
+
+    if status == 'not_found':
+        return jsonify({'error': '该邮箱不在可绑定邮箱库中', 'status': status}), 404
+
+    if status == 'assigned_to_other':
+        return jsonify({'error': '该邮箱已被其他用户绑定', 'status': status}), 409
+
+    if status == 'disabled':
+        return jsonify({'error': '该邮箱已被禁用，无法绑定', 'status': status}), 409
+
+    if status == 'invalid_email':
+        return jsonify({'error': '邮箱地址不能为空', 'status': status}), 400
+
+    if status == 'unsupported_type':
+        return jsonify({'error': '该邮箱类型暂不支持绑定', 'status': status}), 400
+
+    logger.error(f"绑定总邮箱库邮箱失败: {result}")
+    return jsonify({'error': '绑定邮箱失败', 'status': status}), 500
+
+
+@app.route('/api/admin/mail-pool/sync', methods=['POST'])
+@token_required
+@admin_required
+def sync_admin_mail_pool(current_user):
+    """管理员手动同步宿主机挂载的总邮箱库目录。"""
+    result = sync_mail_pool_directory(db, get_mail_pool_dir())
+    logger.info(f"管理员 {current_user['username']} 同步总邮箱库: {result}")
+    return jsonify(result)
+
+
+@app.route('/api/admin/mail-pool/stats', methods=['GET'])
+@token_required
+@admin_required
+def get_admin_mail_pool_stats(current_user):
+    """管理员查看总邮箱库统计，不给普通用户开放。"""
+    return jsonify(db.get_mail_pool_stats())
+
+
 @app.route('/api/admin/config/registration', methods=['POST'])
 @token_required
 @admin_required
@@ -1121,6 +1183,39 @@ def toggle_email_realtime_check(current_user, email_id):
             'message': f'切换邮箱实时检查状态失败: {str(e)}'
         }), 500
 
+def start_mail_pool_auto_sync():
+    """启动总邮箱库后台同步：启动立即扫一次，之后按间隔扫描新增文件。"""
+    try:
+        interval = int(os.environ.get('MAIL_POOL_SCAN_INTERVAL', '300'))
+    except ValueError:
+        interval = 300
+
+    if interval <= 0:
+        logger.info('总邮箱库自动同步已关闭')
+        return None
+
+    try:
+        result = sync_mail_pool_directory(db, get_mail_pool_dir())
+        logger.info(f"\u603b\u90ae\u7bb1\u5e93\u542f\u52a8\u540c\u6b65\u5b8c\u6210: {result}")
+    except Exception as e:
+        logger.error(f"\u603b\u90ae\u7bb1\u5e93\u542f\u52a8\u540c\u6b65\u5931\u8d25: {str(e)}")
+
+    def worker():
+        while True:
+            time.sleep(interval)
+            try:
+                result = sync_mail_pool_directory(db, get_mail_pool_dir())
+                logger.info(f"\u603b\u90ae\u7bb1\u5e93\u81ea\u52a8\u540c\u6b65\u5b8c\u6210: {result}")
+            except Exception as e:
+                logger.error(f"\u603b\u90ae\u7bb1\u5e93\u81ea\u52a8\u540c\u6b65\u5931\u8d25: {str(e)}")
+
+    sync_thread = threading.Thread(target=worker, name='mail-pool-sync')
+    sync_thread.daemon = True
+    sync_thread.start()
+    logger.info(f"总邮箱库自动同步已启动，目录: {get_mail_pool_dir()}, 间隔: {interval}秒")
+    return sync_thread
+
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='花火邮箱助手')
@@ -1150,6 +1245,9 @@ if __name__ == '__main__':
         ws_thread = threading.Thread(target=start_websocket_server)
         ws_thread.daemon = True
         ws_thread.start()
+
+        # 启动总邮箱库自动同步
+        start_mail_pool_auto_sync()
 
         # 启动实时邮件检查
         email_processor.start_real_time_check(check_interval=60)

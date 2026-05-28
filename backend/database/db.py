@@ -153,6 +153,7 @@ class Database:
             ''')
 
             # 检查并添加新字段
+            self._ensure_mail_pool_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password_hash', 'TEXT NOT NULL')
 
@@ -197,6 +198,7 @@ class Database:
                 )
             ''')
 
+            self._ensure_mail_pool_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password', 'TEXT')
             self._check_and_add_column('users', 'password_hash', 'TEXT')
@@ -223,6 +225,29 @@ class Database:
         except Exception as e:
             logger.error(f"迁移现有数据库结构失败: {str(e)}")
             traceback.print_exc()
+
+    def _ensure_mail_pool_table(self):
+        """创建/补齐总邮箱库表。该表不走普通邮箱列表接口。"""
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS mail_pool (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT,
+                client_id TEXT,
+                refresh_token TEXT,
+                mail_type TEXT DEFAULT 'outlook',
+                status TEXT DEFAULT 'available',
+                assigned_user_id INTEGER,
+                source_file TEXT,
+                imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                assigned_at TIMESTAMP,
+                last_check_time TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (assigned_user_id) REFERENCES users (id)
+            )
+        ''')
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_mail_pool_status ON mail_pool(status)')
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_mail_pool_assigned_user ON mail_pool(assigned_user_id)')
 
     def _check_and_add_column(self, table, column, type_def):
         """检查表中是否存在某列，如果不存在则添加"""
@@ -504,12 +529,159 @@ class Database:
         return cursor.fetchall()
 
     def email_exists(self, user_id, email):
-        """??????????????"""
+        """检查指定用户是否已添加该邮箱。"""
         cursor = self.conn.execute(
             "SELECT 1 FROM emails WHERE user_id = ? AND email = ? LIMIT 1",
             (user_id, email)
         )
         return cursor.fetchone() is not None
+
+    def _normalize_pool_email(self, email):
+        return (email or '').strip().lower()
+
+    def add_mail_pool_entry(self, email, password, client_id, refresh_token, mail_type='outlook', source_file=None):
+        """向总邮箱库加入一条记录。重复邮箱不报错，返回 duplicate。"""
+        email = self._normalize_pool_email(email)
+        if not email:
+            return False, 'empty_email'
+
+        try:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO mail_pool (
+                    email, password, client_id, refresh_token, mail_type, status, source_file,
+                    imported_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'available', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (email, password, client_id, refresh_token, mail_type or 'outlook', source_file)
+            )
+            self.conn.commit()
+            logger.info(f"总邮箱库导入成功: {email}, ID: {cursor.lastrowid}")
+            return True, 'imported'
+        except sqlite3.IntegrityError:
+            logger.info(f"总邮箱库已存在，跳过: {email}")
+            return False, 'duplicate'
+        except Exception as e:
+            logger.error(f"总邮箱库导入失败: {email}, 错误: {str(e)}")
+            return False, str(e)
+
+    def get_mail_pool_entry_by_email(self, email):
+        """按邮箱地址精确查总库记录。普通用户 API 不暴露此方法结果。"""
+        email = self._normalize_pool_email(email)
+        cursor = self.conn.execute("SELECT * FROM mail_pool WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_mail_pool_stats(self):
+        """获取总邮箱库聚合统计，不返回具体邮箱凭据。"""
+        cursor = self.conn.execute("SELECT status, COUNT(*) AS count FROM mail_pool GROUP BY status")
+        by_status = {row['status'] or 'unknown': row['count'] for row in cursor.fetchall()}
+        total = sum(by_status.values())
+        return {
+            'total': total,
+            'available': by_status.get('available', 0),
+            'assigned': by_status.get('assigned', 0),
+            'disabled': by_status.get('disabled', 0),
+            'by_status': by_status
+        }
+
+    def get_mail_pool_entries(self, limit=100, status=None):
+        """管理员查看总库用；默认限制返回数量。"""
+        limit = max(1, min(int(limit or 100), 1000))
+        if status:
+            cursor = self.conn.execute(
+                "SELECT * FROM mail_pool WHERE status = ? ORDER BY imported_at DESC LIMIT ?",
+                (status, limit)
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT * FROM mail_pool ORDER BY imported_at DESC LIMIT ?",
+                (limit,)
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def bind_mail_pool_email(self, user_id, email):
+        """普通用户按邮箱地址绑定总库邮箱；不会泄露其他总库记录。"""
+        email = self._normalize_pool_email(email)
+        if not email:
+            return {'status': 'invalid_email'}
+
+        try:
+            entry = self.get_mail_pool_entry_by_email(email)
+            if not entry:
+                return {'status': 'not_found'}
+
+            existing = self.conn.execute(
+                "SELECT id FROM emails WHERE user_id = ? AND email = ? LIMIT 1",
+                (user_id, email)
+            ).fetchone()
+
+            assigned_user_id = entry.get('assigned_user_id')
+            if entry.get('status') == 'disabled':
+                return {'status': 'disabled'}
+
+            if assigned_user_id and assigned_user_id != user_id:
+                return {'status': 'assigned_to_other'}
+
+            if existing:
+                self.conn.execute(
+                    """
+                    UPDATE mail_pool
+                    SET status = 'assigned', assigned_user_id = ?,
+                        assigned_at = COALESCE(assigned_at, CURRENT_TIMESTAMP),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE email = ?
+                    """,
+                    (user_id, email)
+                )
+                self.conn.commit()
+                return {'status': 'already_bound', 'email_id': existing['id'], 'email': email}
+
+            mail_type = entry.get('mail_type') or 'outlook'
+            if mail_type != 'outlook':
+                return {'status': 'unsupported_type'}
+
+            cursor = self.conn.execute(
+                """
+                INSERT INTO emails (
+                    user_id, email, password, client_id, refresh_token, mail_type,
+                    enable_realtime_check, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    user_id,
+                    email,
+                    entry.get('password') or '',
+                    entry.get('client_id'),
+                    entry.get('refresh_token'),
+                    mail_type
+                )
+            )
+            email_id = cursor.lastrowid
+            self.conn.execute(
+                """
+                UPDATE mail_pool
+                SET status = 'assigned', assigned_user_id = ?, assigned_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE email = ?
+                """,
+                (user_id, email)
+            )
+            self.conn.commit()
+            logger.info(f"用户ID {user_id} 已绑定总库邮箱: {email}, 邮箱ID: {email_id}")
+            return {'status': 'bound', 'email_id': email_id, 'email': email}
+        except sqlite3.IntegrityError:
+            existing = self.conn.execute(
+                "SELECT id FROM emails WHERE user_id = ? AND email = ? LIMIT 1",
+                (user_id, email)
+            ).fetchone()
+            if existing:
+                return {'status': 'already_bound', 'email_id': existing['id'], 'email': email}
+            logger.warning(f"绑定总库邮箱时出现唯一约束冲突: {email}")
+            return {'status': 'conflict'}
+        except Exception as e:
+            logger.error(f"绑定总库邮箱失败: user_id={user_id}, email={email}, 错误: {str(e)}")
+            return {'status': 'error', 'error': str(e)}
 
     def get_email_by_id(self, email_id, user_id=None):
         """根据ID获取邮箱账号，可以验证所有者"""

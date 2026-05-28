@@ -8,12 +8,15 @@ services:
       - "18000:80"
     volumes:
       - ./backend/data:/app/backend/data
+      - ./mail:/app/mail:ro
     environment:
       - TZ=Asia/Shanghai
       - HOST=0.0.0.0
       - FLASK_PORT=5000
       - WS_PORT=8765
       - JWT_SECRET_KEY=your_secret_key_here
+      - MAIL_POOL_DIR=/app/mail
+      - MAIL_POOL_SCAN_INTERVAL=300
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
       interval: 30s

@@ -58,3 +58,6 @@ backend/data/*.db
 backend/data-backups/
 # Git worktrees
 .worktrees/
+# Private mail pool files (keep directory, never commit customer mailbox data)
+mail/*
+!mail/.gitkeep
