@@ -35,10 +35,21 @@ from .logger import (
     timing_decorator
 )
 from .outlook import OutlookMailHandler
-from .imap import IMAPMailHandler
+from .imap import IMAPMailboxInvalidError, IMAPMailHandler
 from .gmail import GmailHandler
 from .qq import QQMailHandler
 from ._real_time_check import RealTimeChecker
+
+
+def emit_progress(callback, progress, message, status=None):
+    """兼容旧的二参数回调，同时允许新回调携带状态。"""
+    if not callback:
+        return
+    try:
+        callback(progress, message, status)
+    except TypeError:
+        callback(progress, message)
+
 
 class MailProcessor:
     """统一的邮件处理类"""
@@ -254,9 +265,12 @@ class EmailBatchProcessor:
 
         # 创建进度回调
         def create_email_progress_callback(email_id):
-            def callback(progress, message):
+            def callback(progress, message, status=None):
                 if progress_callback:
-                    progress_callback(email_id, progress, message)
+                    try:
+                        progress_callback(email_id, progress, message, status)
+                    except TypeError:
+                        progress_callback(email_id, progress, message)
             return callback
 
         # 选择对应的线程池
@@ -452,19 +466,23 @@ class EmailBatchProcessor:
                         'message': f'成功获取 {len(mail_records)} 封邮件，新增 {saved_count} 封'
                     }
 
+                except IMAPMailboxInvalidError as e:
+                    error_msg = f"邮箱失效：{str(e)}"
+                    log_email_error(email_info['email'], email_id, error_msg)
+                    emit_progress(callback, 100, error_msg, 'invalid')
+                    return {'success': False, 'status': 'invalid', 'message': error_msg}
+
                 except Exception as e:
                     error_msg = f"处理IMAP邮箱失败: {str(e)}"
                     log_email_error(email_info['email'], email_id, error_msg)
-                    if callback:
-                        callback(0, error_msg)
-                    return {'success': False, 'message': error_msg}
+                    emit_progress(callback, 100, error_msg, 'failed')
+                    return {'success': False, 'status': 'failed', 'message': error_msg}
 
         except Exception as e:
             error_msg = f"处理邮箱失败: {str(e)}"
             log_email_error(email_info['email'], email_id, error_msg)
-            if callback:
-                callback(0, error_msg)
-            return {'success': False, 'message': error_msg}
+            emit_progress(callback, 100, error_msg, 'failed')
+            return {'success': False, 'status': 'failed', 'message': error_msg}
 
         finally:
             # 标记处理完成，释放资源

@@ -39,6 +39,11 @@ from .logger import (
 
 logger = logging.getLogger(__name__)
 
+
+class IMAPMailboxInvalidError(Exception):
+    """IMAP 连接或认证失败，表示该邮箱当前不可用。"""
+
+
 class IMAPMailHandler:
     """IMAP邮箱处理类 - 增强版"""
 
@@ -313,7 +318,7 @@ class IMAPMailHandler:
                     mail.logout()
                 except:
                     pass
-            return []
+            raise IMAPMailboxInvalidError(str(e)) from e
 
     @staticmethod
     @timing_decorator

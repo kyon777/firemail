@@ -122,6 +122,32 @@ describe('emails store - checkEmail', () => {
     expect(store.processingEmails[10]).toBeUndefined()
   })
 
+  it('keeps invalid mailbox feedback visible and releases processing state', async () => {
+    websocket.isConnected = true
+    websocket.send.mockReturnValue(true)
+    const store = useEmailsStore()
+    store.fetchEmails = vi.fn()
+    store.fetchMailRecords = vi.fn()
+    store.initWebSocketListeners()
+
+    await store.checkEmail(13)
+
+    const checkProgressHandler = websocket.onMessage.mock.calls.find(([type]) => type === 'check_progress')[1]
+    checkProgressHandler({
+      email_id: 13,
+      progress: 100,
+      message: '邮箱失效：AUTHENTICATIONFAILED invalid credentials',
+      status: 'invalid'
+    })
+
+    expect(store.processingEmails[13]).toEqual(expect.objectContaining({
+      progress: 100,
+      message: '邮箱失效：AUTHENTICATIONFAILED invalid credentials',
+      status: 'invalid'
+    }))
+    expect(store.getProcessingStatus(13).status).toBe('invalid')
+  })
+
   it('does not let an old completion timer delete a newer processing state', async () => {
     vi.useFakeTimers()
     websocket.isConnected = true

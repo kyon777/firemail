@@ -81,10 +81,18 @@ export const useEmailsStore = defineStore('emails', {
 
       // 处理进度更新
       websocket.onMessage('check_progress', (data) => {
-        const { email_id, progress, message } = data;
+        const { email_id, progress, message, status } = data;
         const currentEntry = this.processingEmails[email_id];
         const sequence = currentEntry?._sequence ?? ++this.processingSequence;
-        this.processingEmails[email_id] = { progress, message, _sequence: sequence };
+        this.processingEmails[email_id] = { progress, message, status, _sequence: sequence };
+
+        if (status === 'invalid' || status === 'failed') {
+          this.fetchEmails();
+          if (this.currentEmailId === email_id) {
+            this.fetchMailRecords(email_id);
+          }
+          return;
+        }
 
         // 进度完成后刷新邮箱列表
         if (progress === 100) {

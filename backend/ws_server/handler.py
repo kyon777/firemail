@@ -262,7 +262,7 @@ class WebSocketHandler:
                 return
             
             # 定义详细的进度回调函数
-            def progress_callback(email_id, progress, message):
+            def progress_callback(email_id, progress, message, status=None):
                 # 获取邮箱信息用于更详细的日志
                 email_info = self.db.get_email_by_id(email_id)
                 email_address = email_info['email'] if email_info else f"ID:{email_id}"
@@ -276,7 +276,7 @@ class WebSocketHandler:
                     logger.info(f"邮箱 {email_address} 检查进度: {progress}% - {message}")
                 
                 # 发送进度更新到WebSocket
-                asyncio.run(self.send_progress_update(user_id, email_id, progress, message))
+                asyncio.run(self.send_progress_update(user_id, email_id, progress, message, status=status))
             
             # 启动检查邮箱任务
             with ThreadPoolExecutor() as executor:
@@ -454,7 +454,7 @@ class WebSocketHandler:
                 'message': f'删除邮箱失败: {str(e)}'
             }))
     
-    async def send_progress_update(self, user_id, email_id, progress, message):
+    async def send_progress_update(self, user_id, email_id, progress, message, status=None):
         """发送进度更新给用户"""
         if user_id not in self.user_sockets:
             logger.warning(f"找不到用户ID: {user_id}的WebSocket连接，无法发送进度更新")
@@ -469,6 +469,7 @@ class WebSocketHandler:
             'email_id': email_id,
             'progress': progress,
             'message': message,
+            'status': status,
             'timestamp': datetime.now().isoformat()
         })
         

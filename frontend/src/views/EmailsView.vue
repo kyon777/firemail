@@ -69,6 +69,9 @@
             <template #default="scope">
               <div class="email-address-cell">
                 <span class="email-address-text">{{ scope.row.email }}</span>
+                <span v-if="getEmailCheckFeedback(scope.row)" class="email-check-feedback">
+                  {{ getEmailCheckFeedback(scope.row) }}
+                </span>
               </div>
             </template>
           </el-table-column>
@@ -1116,6 +1119,14 @@ const isEmailProcessing = (email) => {
   return status && status.progress >= 0 && status.progress < 100
 }
 
+const getEmailCheckFeedback = (email) => {
+  const status = emailsStore.getProcessingStatus(email.id)
+  if (!status || !['invalid', 'failed'].includes(status.status)) {
+    return ''
+  }
+  return status.message || '邮箱检查失败'
+}
+
 // 获取邮箱操作文本
 const getEmailActionText = (email) => {
   return isEmailProcessing(email) ? '检查中...' : '检查邮件'
@@ -1497,7 +1508,9 @@ onMounted(() => {
 
 .email-address-cell {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1510,6 +1523,13 @@ onMounted(() => {
   text-overflow: ellipsis;
   font-weight: 500;
   color: var(--text-color);
+}
+
+.email-check-feedback {
+  color: #f56c6c;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: normal;
 }
 
 .mail-type-tag {
