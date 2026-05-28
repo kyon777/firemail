@@ -156,6 +156,7 @@ class Database:
             self._ensure_mail_pool_table()
             self._ensure_mail_pool_meta_table()
             self._ensure_ip_rate_limit_table()
+            self._ensure_email_check_limit_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password_hash', 'TEXT NOT NULL')
 
@@ -203,6 +204,7 @@ class Database:
             self._ensure_mail_pool_table()
             self._ensure_mail_pool_meta_table()
             self._ensure_ip_rate_limit_table()
+            self._ensure_email_check_limit_table()
             self._check_and_add_column('emails', 'enable_realtime_check', 'INTEGER DEFAULT 0')
             self._check_and_add_column('users', 'password', 'TEXT')
             self._check_and_add_column('users', 'password_hash', 'TEXT')
@@ -282,6 +284,30 @@ class Database:
             )
         """)
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_ip_rate_limits_blocked_until ON ip_rate_limits(blocked_until)')
+        self.conn.commit()
+
+    def _ensure_email_check_limit_table(self):
+        """创建/补齐邮箱检查限流表。
+
+        该表专门用于“前端点击检查邮箱/收码”的限流：
+        - 同一 IP 每 24 小时最多检查 50 个不同邮箱；
+        - 同一 IP + 同一邮箱 60 秒内最多检查 3 次。
+        """
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS ip_email_check_limits (
+                ip TEXT NOT NULL,
+                email_id INTEGER NOT NULL,
+                daily_window_start TEXT NOT NULL,
+                minute_window_start TEXT NOT NULL,
+                minute_count INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ip, email_id)
+            )
+        """)
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_ip_email_check_limits_daily '
+            'ON ip_email_check_limits(ip, daily_window_start)'
+        )
         self.conn.commit()
 
     @staticmethod
@@ -448,6 +474,143 @@ class Database:
         self.conn.commit()
         return {
             'allowed': True,
+            'limit': daily_limit,
+            'count': new_count,
+            'remaining': max(0, daily_limit - new_count),
+            'reset_at': reset_at,
+        }
+
+    def consume_email_check_limits(self, ip, email_ids, daily_limit=50, minute_limit=3, now=None):
+        """消耗邮箱检查额度。
+
+        每日额度按同一 IP 检查过的“不同 email_id”计算；重复检查同一个邮箱不重复扣
+        每日额度。同时对同一 IP + 同一 email_id 做 60 秒窗口限流，窗口内第 4 次
+        返回 429 所需的状态。
+        """
+        self._ensure_email_check_limit_table()
+        now = now or datetime.utcnow()
+        ip = (ip or 'unknown').strip() or 'unknown'
+        daily_limit = max(1, int(daily_limit or 50))
+        minute_limit = max(1, int(minute_limit or 3))
+
+        unique_email_ids = []
+        seen = set()
+        for raw_email_id in email_ids or []:
+            try:
+                email_id = int(raw_email_id)
+            except (TypeError, ValueError):
+                continue
+            if email_id not in seen:
+                seen.add(email_id)
+                unique_email_ids.append(email_id)
+
+        if not unique_email_ids:
+            return {
+                'allowed': False,
+                'status': 'invalid_request',
+                'message': '未提供邮箱ID',
+                'limit': daily_limit,
+                'count': 0,
+                'remaining': daily_limit,
+                'reset_at': self._format_limit_time(now + timedelta(hours=24)),
+            }
+
+        daily_cutoff = now - timedelta(hours=24)
+
+        cursor = self.conn.execute(
+            """
+            SELECT email_id, daily_window_start, minute_window_start, minute_count
+            FROM ip_email_check_limits
+            WHERE ip = ?
+            """,
+            (ip,)
+        )
+        rows_by_email_id = {int(row['email_id']): dict(row) for row in cursor.fetchall()}
+
+        active_daily_ids = set()
+        active_daily_starts = []
+        for email_id, row in rows_by_email_id.items():
+            daily_start = self._parse_limit_time(row.get('daily_window_start'))
+            if daily_start and daily_start >= daily_cutoff:
+                active_daily_ids.add(email_id)
+                active_daily_starts.append(daily_start)
+
+        current_count = len(active_daily_ids)
+        new_email_ids = [email_id for email_id in unique_email_ids if email_id not in active_daily_ids]
+        reset_at_time = (min(active_daily_starts) + timedelta(hours=24)) if active_daily_starts else (now + timedelta(hours=24))
+        reset_at = self._format_limit_time(reset_at_time)
+
+        if current_count + len(new_email_ids) > daily_limit:
+            return {
+                'allowed': False,
+                'status': 'rate_limited',
+                'message': '每天最多只能检查50个邮箱验证码，请明天再试',
+                'limit': daily_limit,
+                'count': current_count,
+                'remaining': max(0, daily_limit - current_count),
+                'reset_at': reset_at,
+            }
+
+        minute_updates = {}
+        for email_id in unique_email_ids:
+            row = rows_by_email_id.get(email_id)
+            minute_start = self._parse_limit_time(row.get('minute_window_start')) if row else None
+            if not minute_start or now - minute_start >= timedelta(seconds=60):
+                minute_start = now
+                minute_count = 1
+            else:
+                minute_count = int(row.get('minute_count') or 0)
+                if minute_count >= minute_limit:
+                    minute_reset_at = minute_start + timedelta(seconds=60)
+                    retry_after = max(1, int((minute_reset_at - now).total_seconds()))
+                    return {
+                        'allowed': False,
+                        'status': 'mailbox_rate_limited',
+                        'message': '同一个邮箱1分钟最多检查3次，请稍后再试',
+                        'email_id': email_id,
+                        'limit': minute_limit,
+                        'count': minute_count,
+                        'remaining': 0,
+                        'retry_after': retry_after,
+                        'reset_at': self._format_limit_time(minute_reset_at),
+                    }
+                minute_count += 1
+            minute_updates[email_id] = (minute_start, minute_count)
+
+        for email_id in unique_email_ids:
+            row = rows_by_email_id.get(email_id)
+            daily_start = self._parse_limit_time(row.get('daily_window_start')) if row else None
+            if not daily_start or daily_start < daily_cutoff:
+                daily_start = now
+
+            minute_start, minute_count = minute_updates[email_id]
+            self.conn.execute(
+                """
+                INSERT INTO ip_email_check_limits (
+                    ip, email_id, daily_window_start, minute_window_start, minute_count, updated_at
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(ip, email_id) DO UPDATE SET
+                    daily_window_start = excluded.daily_window_start,
+                    minute_window_start = excluded.minute_window_start,
+                    minute_count = excluded.minute_count,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    ip,
+                    email_id,
+                    self._format_limit_time(daily_start),
+                    self._format_limit_time(minute_start),
+                    minute_count,
+                )
+            )
+        self.conn.commit()
+
+        new_count = current_count + len(new_email_ids)
+        if new_email_ids and not active_daily_starts:
+            reset_at = self._format_limit_time(now + timedelta(hours=24))
+        return {
+            'allowed': True,
+            'status': 'allowed',
             'limit': daily_limit,
             'count': new_count,
             'remaining': max(0, daily_limit - new_count),

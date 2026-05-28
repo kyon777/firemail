@@ -2,6 +2,7 @@ import sys
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -54,6 +55,66 @@ class IpLimitDatabaseTestCase(unittest.TestCase):
         self.assertFalse(rejected['allowed'])
         self.assertEqual(rejected['remaining'], 0)
 
+    def test_email_check_daily_limit_counts_unique_mailboxes_per_ip(self):
+        ip = '203.0.113.21'
+        t0 = datetime(2026, 5, 28, 12, 0, 0)
+
+        first = self.db.consume_email_check_limits(ip, [1], daily_limit=2, minute_limit=3, now=t0)
+        repeated = self.db.consume_email_check_limits(ip, [1], daily_limit=2, minute_limit=3, now=t0 + timedelta(seconds=10))
+        second_unique = self.db.consume_email_check_limits(ip, [2], daily_limit=2, minute_limit=3, now=t0 + timedelta(seconds=20))
+        over_limit = self.db.consume_email_check_limits(ip, [3], daily_limit=2, minute_limit=3, now=t0 + timedelta(seconds=30))
+
+        self.assertTrue(first['allowed'])
+        self.assertEqual(first['count'], 1)
+        self.assertEqual(first['remaining'], 1)
+        self.assertTrue(repeated['allowed'])
+        self.assertEqual(repeated['count'], 1)
+        self.assertEqual(repeated['remaining'], 1)
+        self.assertTrue(second_unique['allowed'])
+        self.assertEqual(second_unique['count'], 2)
+        self.assertEqual(second_unique['remaining'], 0)
+        self.assertFalse(over_limit['allowed'])
+        self.assertEqual(over_limit['status'], 'rate_limited')
+        self.assertEqual(over_limit['remaining'], 0)
+
+    def test_same_mailbox_fourth_check_within_one_minute_is_rate_limited(self):
+        ip = '203.0.113.22'
+        t0 = datetime(2026, 5, 28, 12, 0, 0)
+
+        first = self.db.consume_email_check_limits(ip, [9], daily_limit=50, minute_limit=3, now=t0)
+        second = self.db.consume_email_check_limits(ip, [9], daily_limit=50, minute_limit=3, now=t0 + timedelta(seconds=10))
+        third = self.db.consume_email_check_limits(ip, [9], daily_limit=50, minute_limit=3, now=t0 + timedelta(seconds=20))
+        fourth = self.db.consume_email_check_limits(ip, [9], daily_limit=50, minute_limit=3, now=t0 + timedelta(seconds=30))
+        after_reset = self.db.consume_email_check_limits(ip, [9], daily_limit=50, minute_limit=3, now=t0 + timedelta(seconds=61))
+
+        self.assertTrue(first['allowed'])
+        self.assertTrue(second['allowed'])
+        self.assertTrue(third['allowed'])
+        self.assertFalse(fourth['allowed'])
+        self.assertEqual(fourth['status'], 'mailbox_rate_limited')
+        self.assertEqual(fourth['email_id'], 9)
+        self.assertGreaterEqual(fourth['retry_after'], 1)
+        self.assertTrue(after_reset['allowed'])
+
+    def test_batch_email_check_daily_limit_only_counts_new_mailboxes(self):
+        ip = '203.0.113.23'
+        t0 = datetime(2026, 5, 28, 12, 0, 0)
+
+        first = self.db.consume_email_check_limits(ip, [1, 2], daily_limit=3, minute_limit=3, now=t0)
+        second = self.db.consume_email_check_limits(ip, [2, 3], daily_limit=3, minute_limit=3, now=t0 + timedelta(seconds=10))
+        third = self.db.consume_email_check_limits(ip, [1, 4], daily_limit=3, minute_limit=3, now=t0 + timedelta(seconds=20))
+
+        self.assertTrue(first['allowed'])
+        self.assertEqual(first['count'], 2)
+        self.assertEqual(first['remaining'], 1)
+        self.assertTrue(second['allowed'])
+        self.assertEqual(second['count'], 3)
+        self.assertEqual(second['remaining'], 0)
+        self.assertFalse(third['allowed'])
+        self.assertEqual(third['status'], 'rate_limited')
+        self.assertEqual(third['count'], 3)
+        self.assertEqual(third['remaining'], 0)
+
 
 class IpLimitApiTestCase(unittest.TestCase):
     def setUp(self):
@@ -105,11 +166,11 @@ class IpLimitApiTestCase(unittest.TestCase):
         mock_create_user.assert_not_called()
 
     @patch('backend.app.email_processor.manual_thread_pool.submit')
-    @patch('backend.app.db.consume_ip_daily_limit')
+    @patch('backend.app.db.consume_email_check_limits', create=True)
     @patch('backend.app.db.get_email_by_id')
     @patch('backend.app.db.get_user_by_id')
     @patch('backend.app.jwt.decode')
-    def test_single_email_check_is_limited_to_50_per_ip_per_day(
+    def test_single_email_check_uses_unique_mailbox_daily_limit(
         self,
         mock_jwt_decode,
         mock_get_user_by_id,
@@ -122,6 +183,7 @@ class IpLimitApiTestCase(unittest.TestCase):
         mock_get_email_by_id.return_value = {'id': 1, 'user_id': 99, 'email': 'demo@outlook.com'}
         mock_consume_limit.return_value = {
             'allowed': False,
+            'status': 'rate_limited',
             'limit': 50,
             'remaining': 0,
             'reset_at': '2099-01-02T00:00:00',
@@ -138,16 +200,58 @@ class IpLimitApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 429)
         self.assertIn('每天最多只能检查50个邮箱验证码', response.get_json()['message'])
-        mock_consume_limit.assert_called_once_with('203.0.113.40', 'email_check', amount=1, daily_limit=50)
+        mock_consume_limit.assert_called_once_with('203.0.113.40', [1], daily_limit=50, minute_limit=3)
+        mock_submit.assert_not_called()
+
+    @patch('backend.app.email_processor.manual_thread_pool.submit')
+    @patch('backend.app.db.consume_email_check_limits', create=True)
+    @patch('backend.app.db.get_email_by_id')
+    @patch('backend.app.db.get_user_by_id')
+    @patch('backend.app.jwt.decode')
+    def test_single_email_fourth_minute_check_returns_429(
+        self,
+        mock_jwt_decode,
+        mock_get_user_by_id,
+        mock_get_email_by_id,
+        mock_consume_limit,
+        mock_submit,
+    ):
+        mock_jwt_decode.return_value = {'user_id': 99}
+        mock_get_user_by_id.return_value = {'id': 99, 'username': 'tester', 'is_admin': False}
+        mock_get_email_by_id.return_value = {'id': 1, 'user_id': 99, 'email': 'demo@outlook.com'}
+        mock_consume_limit.return_value = {
+            'allowed': False,
+            'status': 'mailbox_rate_limited',
+            'email_id': 1,
+            'limit': 3,
+            'remaining': 0,
+            'retry_after': 31,
+            'reset_at': '2099-01-02T00:00:00',
+            'message': '同一个邮箱1分钟最多检查3次，请稍后再试',
+        }
+
+        response = self.client.post(
+            '/api/emails/1/check',
+            json={},
+            headers={
+                'Authorization': 'Bearer fake-token',
+                'X-Forwarded-For': '203.0.113.41',
+            }
+        )
+
+        self.assertEqual(response.status_code, 429)
+        body = response.get_json()
+        self.assertEqual(body['status'], 'mailbox_rate_limited')
+        self.assertEqual(body['retry_after'], 31)
         mock_submit.assert_not_called()
 
     @patch('backend.app.email_processor.check_emails')
-    @patch('backend.app.db.consume_ip_daily_limit')
+    @patch('backend.app.db.consume_email_check_limits', create=True)
     @patch('backend.app.db.get_email_by_id')
     @patch('backend.app.db.get_all_emails')
     @patch('backend.app.db.get_user_by_id')
     @patch('backend.app.jwt.decode')
-    def test_batch_email_check_counts_each_mailbox_against_ip_daily_limit(
+    def test_batch_email_check_uses_unique_mailbox_daily_limit(
         self,
         mock_jwt_decode,
         mock_get_user_by_id,
@@ -168,6 +272,7 @@ class IpLimitApiTestCase(unittest.TestCase):
         }.get(email_id)
         mock_consume_limit.return_value = {
             'allowed': False,
+            'status': 'rate_limited',
             'limit': 50,
             'remaining': 1,
             'reset_at': '2099-01-02T00:00:00',
@@ -184,12 +289,12 @@ class IpLimitApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.get_json()['remaining'], 1)
-        mock_consume_limit.assert_called_once_with('203.0.113.50', 'email_check', amount=2, daily_limit=50)
+        mock_consume_limit.assert_called_once_with('203.0.113.50', [1, 2], daily_limit=50, minute_limit=3)
         mock_check_emails.assert_not_called()
 
 
 class IpLimitWebSocketTestCase(unittest.IsolatedAsyncioTestCase):
-    async def test_websocket_check_emails_uses_same_ip_daily_limit(self):
+    async def test_websocket_check_emails_uses_unique_mailbox_daily_limit(self):
         class FakeDb:
             def __init__(self):
                 self.consume_calls = []
@@ -203,10 +308,11 @@ class IpLimitWebSocketTestCase(unittest.IsolatedAsyncioTestCase):
                     {'id': 2, 'user_id': user_id, 'email': 'b@outlook.com'},
                 ]
 
-            def consume_ip_daily_limit(self, ip, action, amount=1, daily_limit=50):
-                self.consume_calls.append((ip, action, amount, daily_limit))
+            def consume_email_check_limits(self, ip, email_ids, daily_limit=50, minute_limit=3):
+                self.consume_calls.append((ip, email_ids, daily_limit, minute_limit))
                 return {
                     'allowed': False,
+                    'status': 'rate_limited',
                     'limit': daily_limit,
                     'remaining': 1,
                     'reset_at': '2099-01-02T00:00:00',
@@ -240,10 +346,62 @@ class IpLimitWebSocketTestCase(unittest.IsolatedAsyncioTestCase):
 
         await handler.handle_check_emails(websocket, 99, {'email_ids': [1, 2]})
 
-        self.assertEqual(fake_db.consume_calls, [('203.0.113.60', 'email_check', 2, 50)])
+        self.assertEqual(fake_db.consume_calls, [('203.0.113.60', [1, 2], 50, 3)])
         self.assertFalse(fake_processor.checked)
         self.assertEqual(websocket.sent[-1]['type'], 'warning')
         self.assertIn('每天最多只能检查50个邮箱验证码', websocket.sent[-1]['message'])
+
+    async def test_websocket_same_mailbox_minute_limit_sends_429_warning(self):
+        class FakeDb:
+            def get_user_by_id(self, user_id):
+                return {'id': user_id, 'username': 'tester', 'is_admin': False}
+
+            def get_all_emails(self, user_id):
+                return [{'id': 1, 'user_id': user_id, 'email': 'a@outlook.com'}]
+
+            def consume_email_check_limits(self, ip, email_ids, daily_limit=50, minute_limit=3):
+                return {
+                    'allowed': False,
+                    'status': 'mailbox_rate_limited',
+                    'email_id': 1,
+                    'limit': minute_limit,
+                    'remaining': 0,
+                    'retry_after': 30,
+                    'reset_at': '2099-01-02T00:00:00',
+                    'message': '同一个邮箱1分钟最多检查3次，请稍后再试',
+                }
+
+        class FakeEmailProcessor:
+            def __init__(self):
+                self.checked = False
+
+            def is_email_being_processed(self, email_id):
+                return False
+
+            def check_emails(self, email_ids, progress_callback):
+                self.checked = True
+
+        class FakeWebSocket:
+            request_headers = {'X-Forwarded-For': '203.0.113.61'}
+            remote_address = ('127.0.0.1', 12345)
+
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+        handler = WebSocketHandler()
+        fake_processor = FakeEmailProcessor()
+        handler.set_dependencies(FakeDb(), fake_processor)
+        websocket = FakeWebSocket()
+
+        await handler.handle_check_emails(websocket, 99, {'email_ids': [1]})
+
+        self.assertFalse(fake_processor.checked)
+        self.assertEqual(websocket.sent[-1]['type'], 'warning')
+        self.assertEqual(websocket.sent[-1]['status'], 'mailbox_rate_limited')
+        self.assertEqual(websocket.sent[-1]['retry_after'], 30)
 
 
 if __name__ == '__main__':

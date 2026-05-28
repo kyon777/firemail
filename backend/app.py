@@ -78,6 +78,7 @@ ws_handler.set_dependencies(db, email_processor)
 REGISTER_EMAIL_VERIFY_ACTION = 'register_email_verify'
 EMAIL_CHECK_ACTION = 'email_check'
 EMAIL_CHECK_DAILY_LIMIT = 50
+EMAIL_CHECK_MINUTE_LIMIT = 3
 CUSTOMER_VISIBLE_SENDER = 'openai.com'
 
 
@@ -97,6 +98,18 @@ def get_client_ip():
 
 
 def email_check_rate_limited_response(limit_state):
+    if limit_state.get('status') == 'mailbox_rate_limited':
+        return jsonify({
+            'success': False,
+            'status': 'mailbox_rate_limited',
+            'message': limit_state.get('message') or '同一个邮箱1分钟最多检查3次，请稍后再试',
+            'email_id': limit_state.get('email_id'),
+            'limit': limit_state.get('limit', EMAIL_CHECK_MINUTE_LIMIT),
+            'remaining': limit_state.get('remaining', 0),
+            'retry_after': limit_state.get('retry_after'),
+            'reset_at': limit_state.get('reset_at')
+        }), 429
+
     return jsonify({
         'success': False,
         'status': 'rate_limited',
@@ -611,14 +624,18 @@ def check_email(current_user, email_id):
                     'message': '邮箱正在处理中，请稍后再试',
                     'status': 'processing'
                 }), 409
-            limit_state = db.consume_ip_daily_limit(
-                get_client_ip(),
-                EMAIL_CHECK_ACTION,
-                amount=1,
+            client_ip = get_client_ip()
+            limit_state = db.consume_email_check_limits(
+                client_ip,
+                [email_id],
                 daily_limit=EMAIL_CHECK_DAILY_LIMIT,
+                minute_limit=EMAIL_CHECK_MINUTE_LIMIT,
             )
             if not limit_state.get('allowed'):
-                logger.warning(f"邮箱检查被限流: IP={get_client_ip()}, 邮箱ID={email_id}, 剩余额度={limit_state.get('remaining')}")
+                logger.warning(
+                    f"邮箱检查被限流: IP={client_ip}, 邮箱ID={email_id}, "
+                    f"状态={limit_state.get('status')}, 剩余额度={limit_state.get('remaining')}"
+                )
                 return email_check_rate_limited_response(limit_state)
             email_processor.processing_emails[email_id] = True
 
@@ -707,16 +724,17 @@ def batch_check_emails(current_user):
             'processing_ids': processing_ids
         }), 409
 
-    limit_state = db.consume_ip_daily_limit(
-        get_client_ip(),
-        EMAIL_CHECK_ACTION,
-        amount=len(valid_ids),
+    client_ip = get_client_ip()
+    limit_state = db.consume_email_check_limits(
+        client_ip,
+        valid_ids,
         daily_limit=EMAIL_CHECK_DAILY_LIMIT,
+        minute_limit=EMAIL_CHECK_MINUTE_LIMIT,
     )
     if not limit_state.get('allowed'):
         logger.warning(
-            f"批量邮箱检查被限流: IP={get_client_ip()}, 请求数量={len(valid_ids)}, "
-            f"剩余额度={limit_state.get('remaining')}"
+            f"批量邮箱检查被限流: IP={client_ip}, 请求数量={len(valid_ids)}, "
+            f"状态={limit_state.get('status')}, 剩余额度={limit_state.get('remaining')}"
         )
         return email_check_rate_limited_response(limit_state)
 

@@ -13,6 +13,7 @@ logger = logging.getLogger('websocket')
 
 EMAIL_CHECK_ACTION = 'email_check'
 EMAIL_CHECK_DAILY_LIMIT = 50
+EMAIL_CHECK_MINUTE_LIMIT = 3
 CUSTOMER_VISIBLE_SENDER = 'openai.com'
 
 class WebSocketHandler:
@@ -283,13 +284,31 @@ class WebSocketHandler:
                 }))
                 return
 
-            limit_state = self.db.consume_ip_daily_limit(
-                self.get_client_ip(websocket),
-                EMAIL_CHECK_ACTION,
-                amount=len(valid_ids),
+            client_ip = self.get_client_ip(websocket)
+            limit_state = self.db.consume_email_check_limits(
+                client_ip,
+                valid_ids,
                 daily_limit=EMAIL_CHECK_DAILY_LIMIT,
+                minute_limit=EMAIL_CHECK_MINUTE_LIMIT,
             )
             if not limit_state.get('allowed'):
+                if limit_state.get('status') == 'mailbox_rate_limited':
+                    await websocket.send(json.dumps({
+                        'type': 'warning',
+                        'status': 'mailbox_rate_limited',
+                        'message': limit_state.get('message') or '同一个邮箱1分钟最多检查3次，请稍后再试',
+                        'email_id': limit_state.get('email_id'),
+                        'limit': limit_state.get('limit', EMAIL_CHECK_MINUTE_LIMIT),
+                        'remaining': limit_state.get('remaining', 0),
+                        'retry_after': limit_state.get('retry_after'),
+                        'reset_at': limit_state.get('reset_at')
+                    }))
+                    logger.warning(
+                        f"WebSocket邮箱检查被单邮箱分钟限流: IP={client_ip}, "
+                        f"邮箱ID={limit_state.get('email_id')}, retry_after={limit_state.get('retry_after')}"
+                    )
+                    return
+
                 await websocket.send(json.dumps({
                     'type': 'warning',
                     'status': 'rate_limited',
@@ -299,8 +318,8 @@ class WebSocketHandler:
                     'reset_at': limit_state.get('reset_at')
                 }))
                 logger.warning(
-                    f"WebSocket邮箱检查被限流: IP={self.get_client_ip(websocket)}, 请求数量={len(valid_ids)}, "
-                    f"剩余额度={limit_state.get('remaining')}"
+                    f"WebSocket邮箱检查被限流: IP={client_ip}, 请求数量={len(valid_ids)}, "
+                    f"状态={limit_state.get('status')}, 剩余额度={limit_state.get('remaining')}"
                 )
                 return
             
