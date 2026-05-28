@@ -25,7 +25,9 @@ describe('UsersView admin email visibility', () => {
     expect(usersView).toContain('selectedEmailRecords')
     expect(usersView).toContain('openEmailRecordsPanel')
     expect(usersView).toContain('api.getMailRecords')
-    expect(usersView).toContain('mail-record-content')
+    expect(usersView).toContain('openAdminMailContentDialog')
+    expect(usersView).toContain('EmailContentViewer')
+    expect(usersView).not.toContain('<pre class="mail-record-content"')
 
     expect(usersView).not.toContain('batchCheckEmails')
     expect(usersView).not.toContain('check_emails')

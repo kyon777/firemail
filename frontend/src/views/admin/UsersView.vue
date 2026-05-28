@@ -128,13 +128,21 @@
             <div v-else-if="selectedEmailRecords.length === 0" class="text-center text-muted">该邮箱暂无邮件记录</div>
             <div v-else class="mail-records-list">
               <div v-for="record in selectedEmailRecords" :key="record.id" class="mail-record-card">
-                <div class="mail-record-title">{{ record.subject || '无主题' }}</div>
+                <div class="mail-record-card-header">
+                  <div class="mail-record-title">{{ record.subject || '无主题' }}</div>
+                  <button
+                    class="btn btn-sm btn-primary"
+                    @click="openAdminMailContentDialog(record)"
+                  >
+                    查看详情
+                  </button>
+                </div>
                 <div class="mail-record-meta">
                   <span>发件人：{{ record.sender || '未知' }}</span>
                   <span>文件夹：{{ record.folder || '未知' }}</span>
                   <span>时间：{{ formatDate(record.received_time) }}</span>
                 </div>
-                <pre class="mail-record-content">{{ formatMailContent(record.content) }}</pre>
+                <div class="mail-record-preview">{{ formatMailPreview(record.content) }}</div>
               </div>
             </div>
           </div>
@@ -285,14 +293,39 @@
         </div>
       </div>
     </div>
+
+    <!-- 管理员邮件详情预览：复用正式邮件渲染组件，避免 HTML 源码模式 -->
+    <div v-if="showAdminMailContentModal" class="modal-overlay mail-viewer-overlay">
+      <div class="modal-container mail-viewer-modal">
+        <div class="modal-header">
+          <h2>{{ selectedAdminMail ? (selectedAdminMail.subject || '邮件详情') : '邮件详情' }}</h2>
+          <button class="modal-close" @click="closeAdminMailContentDialog">&times;</button>
+        </div>
+        <div class="modal-body mail-viewer-body">
+          <EmailContentViewer
+            v-if="selectedAdminMail"
+            :mail="normalizeMailForViewer(selectedAdminMail)"
+            :attachments="selectedAdminMail.attachments || []"
+            :loading-attachments="false"
+          />
+        </div>
+        <div class="form-actions mail-viewer-actions">
+          <button type="button" class="btn btn-secondary" @click="closeAdminMailContentDialog">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script>
 import api from '@/services/api'
+import EmailContentViewer from '@/components/EmailContentViewer.vue'
 
 export default {
   name: 'UsersView',
+  components: {
+    EmailContentViewer
+  },
   data() {
     return {
       users: [],
@@ -327,6 +360,8 @@ export default {
       selectedEmailRecords: [],
       mailRecordsLoading: false,
       mailRecordsError: null,
+      showAdminMailContentModal: false,
+      selectedAdminMail: null,
       resetPasswordData: {
         newPassword: '',
         confirmPassword: ''
@@ -426,6 +461,7 @@ export default {
       this.selectedUser = null;
       this.selectedUserEmails = [];
       this.closeEmailRecordsPanel();
+      this.closeAdminMailContentDialog();
     },
 
     async openEmailRecordsPanel(email) {
@@ -449,14 +485,74 @@ export default {
       this.selectedEmailRecords = [];
       this.mailRecordsLoading = false;
       this.mailRecordsError = null;
+      this.closeAdminMailContentDialog();
     },
 
-    formatMailContent(content) {
-      if (!content) return '';
-      if (typeof content === 'string') return content;
-      if (content.text) return content.text;
-      if (content.html) return content.html;
-      return JSON.stringify(content, null, 2);
+    openAdminMailContentDialog(record) {
+      this.selectedAdminMail = record;
+      this.showAdminMailContentModal = true;
+    },
+
+    closeAdminMailContentDialog() {
+      this.showAdminMailContentModal = false;
+      this.selectedAdminMail = null;
+    },
+
+    normalizeMailForViewer(mail) {
+      if (!mail) return {};
+
+      const normalized = { ...mail };
+      if (typeof normalized.content === 'object' && normalized.content !== null) {
+        const rawContent = normalized.content.content ||
+          normalized.content.html ||
+          normalized.content.text ||
+          '';
+
+        normalized.content = {
+          ...normalized.content,
+          content: rawContent,
+          has_html: normalized.content.has_html === true ||
+            normalized.content.content_type === 'text/html' ||
+            Boolean(normalized.content.html) ||
+            this.looksLikeHtml(rawContent),
+          content_type: normalized.content.content_type ||
+            (this.looksLikeHtml(rawContent) ? 'text/html' : 'text/plain')
+        };
+      }
+
+      return normalized;
+    },
+
+    looksLikeHtml(content) {
+      if (!content) return false;
+      const text = String(content);
+      return /<(html|body|div|p|table|img|a|br|style|span)(\s|>|\/)/i.test(text);
+    },
+
+    formatMailPreview(content) {
+      if (!content) return '无内容';
+      let rawContent = '';
+      if (typeof content === 'string') {
+        rawContent = content;
+      } else if (content.content || content.html || content.text) {
+        rawContent = content.content || content.html || content.text || '';
+      } else {
+        rawContent = JSON.stringify(content);
+      }
+
+      const preview = String(rawContent)
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!preview) return 'HTML 邮件，请点击“查看详情”查看正文';
+      return preview.length > 180 ? `${preview.slice(0, 180)}...` : preview;
     },
 
     // 添加用户
@@ -873,10 +969,18 @@ export default {
   background: #fff;
 }
 
+.mail-record-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
 .mail-record-title {
   font-weight: 600;
-  margin-bottom: 8px;
   color: #333;
+  line-height: 1.5;
 }
 
 .mail-record-meta {
@@ -888,16 +992,34 @@ export default {
   margin-bottom: 8px;
 }
 
-.mail-record-content {
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
+.mail-record-preview {
+  color: #374151;
+  line-height: 1.6;
   padding: 10px;
   border-radius: 4px;
   background: #f5f5f5;
   font-size: 13px;
+  word-break: break-word;
+}
+
+.mail-viewer-overlay {
+  z-index: 1100;
+}
+
+.mail-viewer-modal {
+  max-width: 1100px;
+  max-height: 92vh;
+}
+
+.mail-viewer-body {
+  max-height: calc(92vh - 150px);
+  overflow-y: auto;
+  background: #f9fafb;
+}
+
+.mail-viewer-actions {
+  padding: 0 20px 20px;
+  margin-top: 0;
 }
 
 .modal-header {
