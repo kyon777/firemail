@@ -32,17 +32,17 @@ class IpLimitDatabaseTestCase(unittest.TestCase):
         self.db.conn.close()
         self.temp_dir.cleanup()
 
-    def test_ip_rate_limit_blocks_after_three_register_email_failures(self):
+    def test_ip_rate_limit_helper_blocks_after_three_legacy_failures(self):
         ip = '203.0.113.10'
 
-        first = self.db.record_ip_failure(ip, 'register_email_verify', block_after=3, block_hours=24)
-        second = self.db.record_ip_failure(ip, 'register_email_verify', block_after=3, block_hours=24)
-        third = self.db.record_ip_failure(ip, 'register_email_verify', block_after=3, block_hours=24)
+        first = self.db.record_ip_failure(ip, 'legacy_failure_action', block_after=3, block_hours=24)
+        second = self.db.record_ip_failure(ip, 'legacy_failure_action', block_after=3, block_hours=24)
+        third = self.db.record_ip_failure(ip, 'legacy_failure_action', block_after=3, block_hours=24)
 
         self.assertFalse(first['blocked'])
         self.assertFalse(second['blocked'])
         self.assertTrue(third['blocked'])
-        self.assertTrue(self.db.is_ip_blocked(ip, 'register_email_verify')['blocked'])
+        self.assertTrue(self.db.is_ip_blocked(ip, 'legacy_failure_action')['blocked'])
 
     def test_ip_daily_limit_helper_remains_for_legacy_non_mailbox_actions(self):
         ip = '203.0.113.20'
@@ -145,7 +145,7 @@ class IpLimitApiTestCase(unittest.TestCase):
     @patch('backend.app.db.record_ip_failure')
     @patch('backend.app.db.is_ip_blocked')
     @patch('backend.app.db.is_registration_allowed')
-    def test_register_records_pool_email_failures_and_blocks_ip(
+    def test_register_does_not_use_ip_blocking_for_pool_email_failures(
         self,
         mock_allowed,
         mock_blocked,
@@ -154,9 +154,7 @@ class IpLimitApiTestCase(unittest.TestCase):
         mock_create_user,
     ):
         mock_allowed.return_value = True
-        mock_blocked.return_value = {'blocked': False}
         mock_cache.get.return_value = None
-        mock_record_failure.return_value = {'blocked': True, 'blocked_until': '2099-01-01T00:00:00'}
 
         response = self.client.post(
             '/api/auth/register',
@@ -168,14 +166,10 @@ class IpLimitApiTestCase(unittest.TestCase):
             headers={'X-Forwarded-For': '203.0.113.30'}
         )
 
-        self.assertEqual(response.status_code, 429)
-        self.assertIn('失败次数过多', response.get_json()['error'])
-        mock_record_failure.assert_called_once_with(
-            '203.0.113.30',
-            'register_email_verify',
-            block_after=3,
-            block_hours=24,
-        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()['error'], '验证邮箱不在可注册邮箱库中')
+        mock_blocked.assert_not_called()
+        mock_record_failure.assert_not_called()
         mock_create_user.assert_not_called()
 
 
