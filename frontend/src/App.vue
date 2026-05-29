@@ -9,13 +9,6 @@
             </router-link>
           </div>
 
-          <div class="header-announcement" role="note" aria-label="使用公告">
-            <span class="announcement-label">公告</span>
-            <span class="announcement-text">
-              如果你的环境 CPA 或者 SUB 经常出现二验，CPA 开填充模式，不要开轮询。轮询会通过反代连续访问几十个号，容易触发风控；填充模式一次只用一个号。SUB 开关位置不确定，各位佬自行查找。
-            </span>
-          </div>
-
           <div class="header-right">
             <!-- 用户未登录状态 -->
             <template v-if="!isAuthenticated">
@@ -52,17 +45,22 @@
           </div>
         </el-header>
 
+        <div v-if="isAuthenticated" class="announcement-strip" role="note" aria-label="使用公告">
+          <el-tag type="warning" effect="dark" round class="announcement-tag">公告</el-tag>
+          <span class="announcement-text">
+            如果你的环境 CPA 或者 SUB 经常出现二验，CPA 开填充模式，不要开轮询。轮询会通过反代连续访问几十个号，容易触发风控；填充模式一次只用一个号。SUB 开关位置不确定，各位佬自行查找。
+          </span>
+        </div>
+
         <!-- 导航菜单 -->
         <el-menu
           v-if="isAuthenticated"
           mode="horizontal"
           :router="true"
           :default-active="$route.path"
+          :ellipsis="false"
           class="app-nav"
         >
-          <el-menu-item index="/">
-            <el-icon><HomeFilled /></el-icon>首页
-          </el-menu-item>
           <el-menu-item index="/emails">
             <el-icon><Message /></el-icon>邮箱管理
           </el-menu-item>
@@ -114,7 +112,7 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useStore } from 'vuex'
 import { ElConfigProvider, ElMessage } from 'element-plus'
-import { ArrowDown, Message, HomeFilled, UserFilled, Setting, Upload } from '@element-plus/icons-vue'
+import { ArrowDown, Message, UserFilled, Setting, Upload } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import websocket from '@/services/websocket'
@@ -354,44 +352,6 @@ body {
   flex: 0 0 auto;
 }
 
-.header-announcement {
-  flex: 1 1 auto;
-  min-width: 180px;
-  max-width: 720px;
-  margin: 0 18px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  border-left: 4px solid #f59e0b;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #fff8e7 0%, #fff 48%, #fff7ed 100%);
-  color: #7c2d12;
-  box-shadow: 0 8px 22px rgba(245, 158, 11, 0.12);
-  overflow: hidden;
-}
-
-.announcement-label {
-  flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #f59e0b;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.announcement-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
 .app-header h1 {
   font-size: 22px;
   color: var(--primary-color);
@@ -445,6 +405,31 @@ body {
 
 .user-dropdown-link:hover .el-icon {
   transform: rotate(180deg);
+}
+
+.announcement-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  background: linear-gradient(90deg, #fff7ed 0%, #fffbeb 48%, #ffffff 100%);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.28);
+  color: #7c2d12;
+  font-size: 13px;
+  line-height: 1.6;
+  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.08);
+}
+
+.announcement-tag {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.announcement-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .app-nav {
@@ -541,9 +526,9 @@ body {
     font-size: 18px;
   }
 
-  .header-announcement {
-    margin: 0 10px;
-    padding: 7px 10px;
+  .announcement-strip {
+    padding: 9px 12px;
+    align-items: flex-start;
   }
 
   .announcement-text {
@@ -569,11 +554,8 @@ body {
     padding-bottom: 8px;
   }
 
-  .header-announcement {
-    order: 3;
-    flex-basis: 100%;
-    max-width: none;
-    margin: 0;
+  .announcement-strip {
+    padding: 8px 10px;
   }
 
   .header-right {

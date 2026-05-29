@@ -51,7 +51,22 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: () => import('@/views/HomeView.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true },
+      beforeEnter: (to, from, next) => {
+        const isAuthenticated = store.getters['auth/isAuthenticated']
+        const isAdmin = store.getters['auth/isAdmin']
+
+        if (!isAuthenticated) {
+          next({
+            name: 'login',
+            query: { redirect: to.fullPath }
+          })
+        } else if (!isAdmin) {
+          next({ name: 'emails' })
+        } else {
+          next()
+        }
+      }
     },
     {
       path: '/emails',
