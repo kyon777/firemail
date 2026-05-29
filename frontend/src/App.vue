@@ -9,6 +9,13 @@
             </router-link>
           </div>
 
+          <div class="header-announcement" role="note" aria-label="使用公告">
+            <span class="announcement-label">公告</span>
+            <span class="announcement-text">
+              如果你的环境 CPA 或者 SUB 经常出现二验，CPA 开填充模式，不要开轮询。轮询会通过反代连续访问几十个号，容易触发风控；填充模式一次只用一个号。SUB 开关位置不确定，各位佬自行查找。
+            </span>
+          </div>
+
           <div class="header-right">
             <!-- 用户未登录状态 -->
             <template v-if="!isAuthenticated">
@@ -337,12 +344,52 @@ body {
 .header-left {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .header-right {
   display: flex;
   align-items: center;
   gap: 16px;
+  flex: 0 0 auto;
+}
+
+.header-announcement {
+  flex: 1 1 auto;
+  min-width: 180px;
+  max-width: 720px;
+  margin: 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-left: 4px solid #f59e0b;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fff8e7 0%, #fff 48%, #fff7ed 100%);
+  color: #7c2d12;
+  box-shadow: 0 8px 22px rgba(245, 158, 11, 0.12);
+  overflow: hidden;
+}
+
+.announcement-label {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.announcement-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .app-header h1 {
@@ -482,12 +529,25 @@ body {
 
 /* 响应式布局 */
 @media (max-width: 768px) {
+  .app-header {
+    padding: 0 12px;
+  }
+
   .header-right {
     gap: 8px;
   }
 
   .app-header h1 {
     font-size: 18px;
+  }
+
+  .header-announcement {
+    margin: 0 10px;
+    padding: 7px 10px;
+  }
+
+  .announcement-text {
+    font-size: 12px;
   }
 
   .connection-status {
@@ -500,6 +560,22 @@ body {
 }
 
 @media (max-width: 576px) {
+  .app-header {
+    height: auto !important;
+    min-height: 60px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .header-announcement {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    margin: 0;
+  }
+
   .header-right {
     flex-direction: column;
     align-items: flex-end;
