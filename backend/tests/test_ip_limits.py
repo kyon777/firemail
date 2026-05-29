@@ -178,6 +178,41 @@ class IpLimitApiTestCase(unittest.TestCase):
         )
         mock_create_user.assert_not_called()
 
+
+    @patch('backend.app.db.create_user')
+    @patch('backend.app.mail_pool_cache')
+    @patch('backend.app.db.record_ip_failure')
+    @patch('backend.app.db.is_ip_blocked')
+    @patch('backend.app.db.is_registration_allowed')
+    def test_register_does_not_block_shared_docker_gateway_ip(
+        self,
+        mock_allowed,
+        mock_blocked,
+        mock_record_failure,
+        mock_cache,
+        mock_create_user,
+    ):
+        mock_allowed.return_value = True
+        mock_blocked.return_value = {'blocked': False}
+        mock_record_failure.return_value = {'blocked': False}
+        mock_cache.get.return_value = None
+
+        response = self.client.post(
+            '/api/auth/register',
+            json={
+                'username': 'customer',
+                'password': 'zz123456',
+                'verification_email': 'missing@outlook.com',
+            },
+            headers={'X-Forwarded-For': '172.28.0.1'}
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()['error'], '验证邮箱不在可注册邮箱库中')
+        mock_blocked.assert_not_called()
+        mock_record_failure.assert_not_called()
+        mock_create_user.assert_not_called()
+
     @patch('backend.app.email_processor.manual_thread_pool.submit')
     @patch('backend.app.db.consume_user_email_check_limits', create=True)
     @patch('backend.app.db.get_email_by_id')

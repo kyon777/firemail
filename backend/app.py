@@ -5,6 +5,7 @@ import threading
 import argparse
 import datetime
 import time
+import ipaddress
 import jwt
 from functools import wraps
 from flask import Flask, send_from_directory, jsonify, request, Response, make_response
@@ -95,6 +96,31 @@ def get_client_ip():
         return real_ip
 
     return request.remote_addr or 'unknown'
+
+
+REGISTER_IP_BLOCK_SKIP_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        '127.0.0.0/8',
+        '10.0.0.0/8',
+        '172.16.0.0/12',
+        '192.168.0.0/16',
+        '169.254.0.0/16',
+        '::1/128',
+        'fc00::/7',
+        'fe80::/10',
+    )
+)
+
+
+def should_apply_register_ip_block(client_ip):
+    """避免把 Docker/反代网关 IP 当成全站注册封禁对象。"""
+    try:
+        parsed_ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+
+    return not any(parsed_ip in network for network in REGISTER_IP_BLOCK_SKIP_NETWORKS)
 
 
 def email_check_rate_limited_response(limit_state):
@@ -254,13 +280,17 @@ def register():
         return jsonify({'error': '注册功能已禁用'}), 403
 
     client_ip = get_client_ip()
-    blocked_state = db.is_ip_blocked(client_ip, REGISTER_EMAIL_VERIFY_ACTION)
-    if blocked_state.get('blocked'):
-        logger.warning(f"注册失败: IP 已被临时封禁: {client_ip}")
-        return jsonify({
-            'error': '注册验证邮箱失败次数过多，请24小时后再试',
-            'blocked_until': blocked_state.get('blocked_until')
-        }), 429
+    apply_ip_block = should_apply_register_ip_block(client_ip)
+    if apply_ip_block:
+        blocked_state = db.is_ip_blocked(client_ip, REGISTER_EMAIL_VERIFY_ACTION)
+        if blocked_state.get('blocked'):
+            logger.warning(f"注册失败: IP 已被临时封禁: {client_ip}")
+            return jsonify({
+                'error': '注册验证邮箱失败次数过多，请24小时后再试',
+                'blocked_until': blocked_state.get('blocked_until')
+            }), 429
+    else:
+        logger.info(f"注册请求跳过共享网关IP封禁检查: {client_ip}")
 
     data = request.get_json(silent=True) or {}
     username = data.get('username')
@@ -282,36 +312,43 @@ def register():
     pool_entry = mail_pool_cache.get(verification_email)
     if not pool_entry:
         logger.warning(f"注册失败: 验证邮箱不在总邮箱库中: {verification_email}")
-        failure_state = db.record_ip_failure(
-            client_ip,
-            REGISTER_EMAIL_VERIFY_ACTION,
-            block_after=3,
-            block_hours=24,
-        )
-        if failure_state.get('blocked'):
-            return jsonify({
-                'error': '注册验证邮箱失败次数过多，请24小时后再试',
-                'blocked_until': failure_state.get('blocked_until')
-            }), 429
+        if apply_ip_block:
+            failure_state = db.record_ip_failure(
+                client_ip,
+                REGISTER_EMAIL_VERIFY_ACTION,
+                block_after=3,
+                block_hours=24,
+            )
+            if failure_state.get('blocked'):
+                return jsonify({
+                    'error': '注册验证邮箱失败次数过多，请24小时后再试',
+                    'blocked_until': failure_state.get('blocked_until')
+                }), 429
+        else:
+            logger.warning(f"注册验证失败但跳过共享网关IP封禁: IP={client_ip}, verification_email={verification_email}")
         return jsonify({'error': '验证邮箱不在可注册邮箱库中'}), 403
 
     pool_status = str(pool_entry.get('status') or '').lower()
     if pool_status == 'disabled':
         logger.warning(f"注册失败: 验证邮箱已停用: {verification_email}")
-        failure_state = db.record_ip_failure(
-            client_ip,
-            REGISTER_EMAIL_VERIFY_ACTION,
-            block_after=3,
-            block_hours=24,
-        )
-        if failure_state.get('blocked'):
-            return jsonify({
-                'error': '注册验证邮箱失败次数过多，请24小时后再试',
-                'blocked_until': failure_state.get('blocked_until')
-            }), 429
+        if apply_ip_block:
+            failure_state = db.record_ip_failure(
+                client_ip,
+                REGISTER_EMAIL_VERIFY_ACTION,
+                block_after=3,
+                block_hours=24,
+            )
+            if failure_state.get('blocked'):
+                return jsonify({
+                    'error': '注册验证邮箱失败次数过多，请24小时后再试',
+                    'blocked_until': failure_state.get('blocked_until')
+                }), 429
+        else:
+            logger.warning(f"注册验证失败但跳过共享网关IP封禁: IP={client_ip}, verification_email={verification_email}")
         return jsonify({'error': '验证邮箱已停用，不能用于注册'}), 403
 
-    db.clear_ip_failures(client_ip, REGISTER_EMAIL_VERIFY_ACTION)
+    if apply_ip_block:
+        db.clear_ip_failures(client_ip, REGISTER_EMAIL_VERIFY_ACTION)
 
     # 用户名格式验证
     if len(username) < 3 or len(username) > 20:
