@@ -7,6 +7,7 @@ import email
 import requests
 import time
 import re
+from datetime import datetime, timezone
 
 from .common import (
     decode_mime_words,
@@ -15,8 +16,13 @@ from .common import (
 )
 from .logger import logger
 
+class OutlookIMAPAuthError(Exception):
+    """Outlook IMAP OAuth2 认证失败，可尝试 Graph 兜底。"""
+
+
 class OutlookMailHandler:
     """Outlook邮箱处理类"""
+    GRAPH_SCOPE = 'https://graph.microsoft.com/.default'
 
     # Outlook常用文件夹映射
     DEFAULT_FOLDERS = {
@@ -203,7 +209,7 @@ class OutlookMailHandler:
             self.mail = None
 
     @staticmethod
-    def get_new_access_token(refresh_token, client_id):
+    def get_new_access_token(refresh_token, client_id, scope=None):
         """刷新获取新的access_token"""
         url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
         data = {
@@ -211,19 +217,31 @@ class OutlookMailHandler:
             'grant_type': 'refresh_token',
             'refresh_token': refresh_token,
         }
+        if scope:
+            data['scope'] = scope
         try:
-            response = requests.post(url, data=data)
-            result_status = response.json().get('error')
+            response = requests.post(url, data=data, timeout=20)
+            response_json = response.json()
+            result_status = response_json.get('error')
             if result_status is not None:
-                logger.error(f"获取访问令牌失败: {result_status}")
+                logger.error(f"获取访问令牌失败: {result_status}, scope={scope or 'default'}")
                 return None
             else:
-                new_access_token = response.json()['access_token']
-                logger.info("成功获取新的访问令牌")
+                new_access_token = response_json['access_token']
+                logger.info(f"成功获取新的访问令牌: scope={scope or 'default'}")
                 return new_access_token
         except Exception as e:
             logger.error(f"刷新令牌过程中发生异常: {str(e)}")
             return None
+
+    @staticmethod
+    def get_new_graph_access_token(refresh_token, client_id):
+        """使用 Microsoft Graph scope 刷新 access_token。"""
+        return OutlookMailHandler.get_new_access_token(
+            refresh_token,
+            client_id,
+            scope=OutlookMailHandler.GRAPH_SCOPE
+        )
 
     @staticmethod
     def generate_auth_string(user, token):
@@ -231,7 +249,7 @@ class OutlookMailHandler:
         return f"user={user}\1auth=Bearer {token}\1\1"
 
     @staticmethod
-    def fetch_emails(email_address, access_token, folder="inbox", callback=None, last_check_time=None):
+    def fetch_emails(email_address, access_token, folder="inbox", callback=None, last_check_time=None, raise_auth_error=False):
         """
         通过IMAP协议获取Outlook/Hotmail邮箱中的邮件
 
@@ -371,6 +389,15 @@ class OutlookMailHandler:
 
             except imaplib.IMAP4.error as e:
                 logger.error(f"IMAP错误: {str(e)}")
+                error_text = str(e).lower()
+                if raise_auth_error and any(keyword in error_text for keyword in [
+                    'authenticate',
+                    'authentication',
+                    'auth',
+                    'login failed',
+                    'invalid credentials',
+                ]):
+                    raise OutlookIMAPAuthError(str(e)) from e
                 time.sleep(1)  # 等待一秒再重试
 
             except Exception as e:
@@ -395,6 +422,7 @@ class OutlookMailHandler:
         callback=None,
         last_check_time=None,
         folder_last_check_times=None,
+        raise_auth_error=False,
     ):
         target_folders = folders or ['inbox', 'junkemail']
         combined_records = []
@@ -411,6 +439,7 @@ class OutlookMailHandler:
                 folder=folder,
                 callback=callback,
                 last_check_time=effective_last_check_time,
+                raise_auth_error=raise_auth_error,
             )
 
             for record in folder_records:
@@ -427,6 +456,127 @@ class OutlookMailHandler:
                 seen_mail_keys.add(mail_key)
                 record.setdefault('folder', folder)
                 record['mail_key'] = mail_key
+                combined_records.append(record)
+
+        return combined_records
+
+    @staticmethod
+    def _parse_graph_datetime(value):
+        if not value:
+            return None
+        try:
+            normalized = str(value).replace('Z', '+00:00')
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except Exception:
+            return None
+
+    @staticmethod
+    def _graph_sender(message):
+        sender = message.get('from') or message.get('sender') or {}
+        email_address = sender.get('emailAddress') or {}
+        name = email_address.get('name') or ''
+        address = email_address.get('address') or ''
+        if name and address:
+            return f'{name} <{address}>'
+        return address or name or '(未知发件人)'
+
+    @staticmethod
+    def _graph_message_to_record(message, folder):
+        received_time = OutlookMailHandler._parse_graph_datetime(message.get('receivedDateTime'))
+        body = message.get('body') or {}
+        content = body.get('content') or message.get('bodyPreview') or ''
+        sender = OutlookMailHandler._graph_sender(message)
+        subject = message.get('subject') or '(无主题)'
+        mail_key = message.get('id') or f"{subject}|{sender}|{message.get('receivedDateTime') or 'unknown'}"
+
+        return {
+            'subject': subject,
+            'sender': sender,
+            'received_time': received_time or datetime.now(timezone.utc),
+            'content': content,
+            'folder': folder,
+            'mail_key': mail_key,
+        }
+
+    @staticmethod
+    def fetch_graph_emails(email_address, access_token, folder='inbox', callback=None, last_check_time=None):
+        """通过 Microsoft Graph 拉取指定文件夹邮件，作为 Outlook IMAP 失败时的兜底。"""
+        if callback is None:
+            callback = lambda progress, folder: None
+
+        last_check_time = normalize_check_time(last_check_time)
+        folder = folder or 'inbox'
+        callback(10, folder)
+
+        url = f'https://graph.microsoft.com/v1.0/me/mailFolders/{folder}/messages'
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json',
+            'Prefer': 'outlook.body-content-type="html"',
+        }
+        params = {
+            '$top': 100,
+            '$select': 'id,subject,from,sender,receivedDateTime,body,bodyPreview',
+            '$orderby': 'receivedDateTime desc',
+        }
+
+        logger.info(f"通过Graph兜底获取Outlook邮箱{email_address}的{folder}文件夹邮件")
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code == 404:
+            logger.warning(f"Graph文件夹不存在或不可访问: {folder}")
+            return []
+        response.raise_for_status()
+
+        messages = response.json().get('value') or []
+        records = []
+        if last_check_time and last_check_time.tzinfo is None:
+            last_check_time = last_check_time.replace(tzinfo=timezone.utc)
+
+        for message in messages:
+            record = OutlookMailHandler._graph_message_to_record(message, folder)
+            if last_check_time and record.get('received_time') and record['received_time'] < last_check_time:
+                continue
+            records.append(record)
+
+        callback(90, folder)
+        logger.info(f"Graph兜底在{folder}文件夹找到{len(records)}封邮件")
+        return records
+
+    @classmethod
+    def fetch_graph_emails_from_folders(
+        cls,
+        email_address,
+        access_token,
+        folders=None,
+        callback=None,
+        last_check_time=None,
+        folder_last_check_times=None,
+    ):
+        target_folders = folders or ['inbox', 'junkemail']
+        combined_records = []
+        seen_mail_keys = set()
+
+        for folder in target_folders:
+            effective_last_check_time = last_check_time
+            if folder_last_check_times and folder in folder_last_check_times:
+                effective_last_check_time = folder_last_check_times[folder]
+
+            folder_records = cls.fetch_graph_emails(
+                email_address,
+                access_token,
+                folder=folder,
+                callback=callback,
+                last_check_time=effective_last_check_time,
+            )
+
+            for record in folder_records:
+                mail_key = record.get('mail_key')
+                if mail_key in seen_mail_keys:
+                    continue
+                seen_mail_keys.add(mail_key)
                 combined_records.append(record)
 
         return combined_records

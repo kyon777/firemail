@@ -34,7 +34,7 @@ from .logger import (
     log_progress,
     timing_decorator
 )
-from .outlook import OutlookMailHandler
+from .outlook import OutlookIMAPAuthError, OutlookMailHandler
 from .imap import IMAPMailboxInvalidError, IMAPMailHandler
 from .gmail import GmailHandler
 from .qq import QQMailHandler
@@ -346,20 +346,6 @@ class EmailBatchProcessor:
 
                 # 获取新的访问令牌
                 try:
-                    access_token = OutlookMailHandler.get_new_access_token(refresh_token, client_id)
-                    if not access_token:
-                        error_msg = "获取访问令牌失败"
-                        if callback:
-                            callback(0, error_msg)
-                        return {'success': False, 'message': error_msg}
-
-                    # 更新邮箱的访问令牌
-                    self.db.update_email_token(email_id, access_token)
-                    email_info['access_token'] = access_token
-
-                    # 记录开始处理
-                    log_email_start(email_info['email'], email_id)
-
                     target_folders = ['inbox', 'junkemail']
                     folder_last_check_times = {}
                     for folder_name in target_folders:
@@ -369,39 +355,74 @@ class EmailBatchProcessor:
                             else None
                         )
 
-                    # 获取邮件，至少覆盖收件箱和垃圾箱
-                    mail_records = OutlookMailHandler.fetch_emails_from_folders(
+                    def finish_outlook_records(mail_records, source_label=''):
+                        label_prefix = f'{source_label}' if source_label else ''
+                        if not mail_records:
+                            if callback:
+                                callback(100, f"{label_prefix}没有找到新邮件")
+
+                            self.update_check_time(self.db, email_id)
+
+                            return {'success': True, 'message': f'{label_prefix}没有找到新邮件'}
+
+                        saved_count = self.save_mail_records(self.db, email_id, mail_records, callback)
+                        self.update_check_time(self.db, email_id)
+                        log_email_complete(email_info['email'], email_id, len(mail_records), len(mail_records), saved_count)
+
+                        return {
+                            'success': True,
+                            'message': f'{label_prefix}成功获取{len(mail_records)}封邮件，新增{saved_count}封'
+                        }
+
+                    access_token = OutlookMailHandler.get_new_access_token(refresh_token, client_id)
+                    imap_error = None
+
+                    if access_token:
+                        self.db.update_email_token(email_id, access_token)
+                        email_info['access_token'] = access_token
+                        log_email_start(email_info['email'], email_id)
+
+                        try:
+                            mail_records = OutlookMailHandler.fetch_emails_from_folders(
+                                email_info['email'],
+                                access_token,
+                                folders=target_folders,
+                                callback=callback,
+                                last_check_time=last_check_time,
+                                folder_last_check_times=folder_last_check_times,
+                                raise_auth_error=True,
+                            )
+                            return finish_outlook_records(mail_records)
+                        except OutlookIMAPAuthError as e:
+                            imap_error = e
+                            logger.warning(f"Outlook IMAP认证失败，尝试Graph兜底: {email_info['email']}, error={str(e)}")
+                            emit_progress(callback, 20, "IMAP认证失败，正在尝试Graph兜底...")
+                    else:
+                        logger.warning(f"Outlook IMAP访问令牌获取失败，尝试Graph兜底: {email_info['email']}")
+                        emit_progress(callback, 20, "IMAP访问令牌获取失败，正在尝试Graph兜底...")
+
+                    graph_access_token = OutlookMailHandler.get_new_graph_access_token(refresh_token, client_id)
+                    if not graph_access_token:
+                        error_msg = "获取Graph访问令牌失败"
+                        if imap_error:
+                            error_msg = f"IMAP认证失败且{error_msg}: {str(imap_error)}"
+                        emit_progress(callback, 0, error_msg, 'failed')
+                        return {'success': False, 'status': 'failed', 'message': error_msg}
+
+                    self.db.update_email_token(email_id, graph_access_token)
+                    email_info['access_token'] = graph_access_token
+                    log_email_start(email_info['email'], email_id)
+
+                    graph_records = OutlookMailHandler.fetch_graph_emails_from_folders(
                         email_info['email'],
-                        access_token,
+                        graph_access_token,
                         folders=target_folders,
                         callback=callback,
                         last_check_time=last_check_time,
-                        folder_last_check_times=folder_last_check_times
+                        folder_last_check_times=folder_last_check_times,
                     )
 
-                    if not mail_records:
-                        if callback:
-                            callback(100, "没有找到新邮件")
-
-                        # 没有找到新邮件也算成功，更新检查时间
-                        self.update_check_time(self.db, email_id)
-
-                        return {'success': True, 'message': '没有找到新邮件'}
-
-                    # 保存邮件记录，传递邮件键列表用于高效去重
-                    mail_keys = [record.get('mail_key', '') for record in mail_records if 'mail_key' in record]
-                    saved_count = self.save_mail_records(self.db, email_id, mail_records, callback)
-
-                    # 更新最后检查时间
-                    self.update_check_time(self.db, email_id)
-
-                    # 记录完成
-                    log_email_complete(email_info['email'], email_id, len(mail_records), len(mail_records), saved_count)
-
-                    return {
-                        'success': True,
-                        'message': f'成功获取{len(mail_records)}封邮件，新增{saved_count}封'
-                    }
+                    return finish_outlook_records(graph_records, 'Graph兜底')
 
                 except Exception as e:
                     error_msg = f"处理Outlook邮箱失败: {str(e)}"
